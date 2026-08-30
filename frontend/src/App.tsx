@@ -15,7 +15,7 @@ type ChatMessage = {
   cache_hit?: boolean;
 };
 
-const API = "http://127.0.0.1:8000";
+const API = "";
 
 const HINTS = [
   "What is the redemption notice period?",
@@ -39,15 +39,29 @@ export default function App() {
     setMessages((m) => [...m, { role: "user", content: q }]);
     setDraft("");
 
-    const res = await fetch(`${API}/v1/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: q, session_id: sessionId }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${API}/v1/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: q, session_id: sessionId }),
+      });
+    } catch {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content:
+            "Could not reach the API. In another terminal run: cd backend, activate .venv, then uvicorn app.main:app --reload --port 8000",
+        },
+      ]);
+      setBusy(false);
+      return;
+    }
     if (!res.ok || !res.body) {
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: `Request failed (${res.status}). Is the API running on port 8000?` },
+        { role: "assistant", content: `Request failed (${res.status}). Is uvicorn running on port 8000?` },
       ]);
       setBusy(false);
       return;
@@ -88,7 +102,12 @@ export default function App() {
 
     setMessages((m) => [
       ...m,
-      { role: "assistant", content: assistant, citations, cache_hit: hit },
+      {
+        role: "assistant",
+        content: assistant || "No answer came back. Confirm uvicorn is running on port 8000.",
+        citations,
+        cache_hit: hit,
+      },
     ]);
     setBusy(false);
     queueMicrotask(() => listRef.current?.scrollTo(0, listRef.current.scrollHeight));
