@@ -15,15 +15,17 @@ from pydantic import BaseModel, Field
 
 from app.agent import generate_answer
 from app.auth import TokenRequest, issue_token, user_from_authorization
-from app.cache import AnswerCache, TTL_SECONDS, build_cache_key, connect_redis
+from app.cache import AnswerCache, build_cache_key, connect_redis
 from app.ingest import ingest_knowledge
-from app.models import Conversation, Message
+from app.models import Message
+from app.settings import get_settings
+from app.store import ConversationStore
 
 _root = Path(__file__).resolve().parents[2]
 load_dotenv(_root / ".env")
 load_dotenv()
 
-conversations: dict[str, Conversation] = {}
+store: ConversationStore | None = None
 chunks = []
 index = None
 index_version = ""
@@ -32,27 +34,31 @@ cache = AnswerCache(None)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global chunks, index, index_version, cache
+    global chunks, index, index_version, cache, store
+    settings = get_settings()
+    settings.require_production_guards()
+    store = ConversationStore(settings)
+    await store.init_schema()
+    if not await store.ping():
+        raise RuntimeError(
+            "PostgreSQL is unavailable. From the repo root run: docker compose up -d postgres redis"
+        )
     chunks, index, index_version = ingest_knowledge()
-    client = await connect_redis()
-    cache = AnswerCache(client)
+    client = await connect_redis(settings.redis_url)
+    cache = AnswerCache(client, ttl_seconds=settings.cache_ttl_seconds)
     await cache.set_index_version(index_version)
     yield
     if client is not None:
         await client.aclose()
+    if store is not None:
+        await store.close()
 
 
-app = FastAPI(title="Fintech AI MVP", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Agentic RAG", version="0.3.0", lifespan=lifespan)
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5175",
-    ],
+    allow_origins=_settings.cors_origin_list(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,29 +70,45 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
+def _db() -> ConversationStore:
+    if store is None:
+        raise HTTPException(503, "Database not ready")
+    return store
+
+
 @app.get("/health")
-def health():
+async def health():
+    settings = get_settings()
+    db = store
+    pg_ok = await db.ping() if db else False
     return {
-        "ok": True,
+        "ok": pg_ok,
+        "environment": settings.environment,
+        "postgres": pg_ok,
         "docs_indexed": len(chunks),
         "index_version": index_version,
         "redis": cache.enabled,
-        "cache_ttl_seconds": TTL_SECONDS,
-        "llm_enabled": bool(os.getenv("LLM_API_KEY", "").strip()),
-        "conversations": len(conversations),
+        "cache_ttl_seconds": settings.cache_ttl_seconds,
+        "llm_enabled": bool((os.getenv("LLM_API_KEY") or "").strip()),
+        "conversations": await db.count() if db and pg_ok else 0,
+        "dev_login": settings.auth_allow_dev_login,
     }
 
 
 @app.post("/v1/auth/token")
 def create_token(body: TokenRequest):
-    """Dev/demo login. Production: replace with your IdP (Auth0, Cognito, Entra)."""
+    settings = get_settings()
+    if not settings.auth_allow_dev_login:
+        raise HTTPException(
+            403,
+            "Dev login is disabled. Issue JWTs from your identity provider (OIDC).",
+        )
     token = issue_token(body.user_id.strip())
     return {"access_token": token, "token_type": "bearer", "user_id": body.user_id.strip()}
 
 
 @app.post("/v1/reindex")
 async def reindex(user_id: str = Depends(user_from_authorization)):
-    """Reload knowledge files, bump index_version, flush Redis answers so stale hits cannot be reused."""
     global chunks, index, index_version
     chunks, index, index_version = ingest_knowledge()
     flushed = await cache.flush_answers()
@@ -101,24 +123,14 @@ async def reindex(user_id: str = Depends(user_from_authorization)):
 
 
 @app.get("/v1/conversations")
-def list_conversations(user_id: str = Depends(user_from_authorization)):
-    mine = [c for c in conversations.values() if c.user_id == user_id]
-    return {
-        "conversations": [
-            {
-                "session_id": c.session_id,
-                "title": c.title,
-                "message_count": len(c.messages),
-            }
-            for c in reversed(mine)
-        ]
-    }
+async def list_conversations(user_id: str = Depends(user_from_authorization)):
+    return {"conversations": await _db().list_for_user(user_id)}
 
 
 @app.get("/v1/conversations/{session_id}")
-def get_conversation(session_id: str, user_id: str = Depends(user_from_authorization)):
-    conv = conversations.get(session_id)
-    if not conv or conv.user_id != user_id:
+async def get_conversation(session_id: str, user_id: str = Depends(user_from_authorization)):
+    conv = await _db().get(session_id, user_id)
+    if not conv:
         raise HTTPException(404, "Conversation not found")
     return {
         "session_id": conv.session_id,
@@ -136,15 +148,15 @@ async def chat(body: ChatRequest, user_id: str = Depends(user_from_authorization
     if not text:
         raise HTTPException(400, "Empty query")
 
+    db = _db()
     new_session = not body.session_id
     if new_session:
         session_id = str(uuid.uuid4())
-        conv = Conversation(session_id=session_id, user_id=user_id, title=text[:60])
-        conversations[session_id] = conv
+        await db.create(session_id, user_id, text[:60])
     else:
         session_id = body.session_id
-        conv = conversations.get(session_id)
-        if not conv or conv.user_id != user_id:
+        existing = await db.get(session_id, user_id)
+        if not existing:
             raise HTTPException(404, "Conversation not found. Start a new chat.")
 
     cache_key = build_cache_key(user_id, session_id, index_version, text)
@@ -164,9 +176,10 @@ async def chat(body: ChatRequest, user_id: str = Depends(user_from_authorization
 
         if cached:
             answer, citations = cached
-            conv.messages.append(Message(role="user", content=text))
-            conv.messages.append(
-                Message(role="assistant", content=answer, citations=citations, cache_hit=True)
+            await db.add_message(session_id, Message(role="user", content=text))
+            await db.add_message(
+                session_id,
+                Message(role="assistant", content=answer, citations=citations, cache_hit=True),
             )
             yield _sse({"type": "cache_hit", "value": True})
             yield _sse({"type": "token", "text": answer})
@@ -175,9 +188,9 @@ async def chat(body: ChatRequest, user_id: str = Depends(user_from_authorization
             return
 
         yield _sse({"type": "cache_hit", "value": False})
-        conv.messages.append(Message(role="user", content=text))
+        await db.add_message(session_id, Message(role="user", content=text))
         answer, citations, used_llm = await generate_answer(text, index)
-        conv.messages.append(Message(role="assistant", content=answer, citations=citations))
+        await db.add_message(session_id, Message(role="assistant", content=answer, citations=citations))
         await cache.set(cache_key, answer, citations)
         yield _sse({"type": "token", "text": answer})
         yield _sse({"type": "citations", "citations": citations})

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 
 import jwt
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
-JWT_ALG = "HS256"
-JWT_HOURS = int(os.getenv("JWT_HOURS", "12"))
+from app.settings import get_settings
 
 
 class TokenRequest(BaseModel):
@@ -17,21 +14,23 @@ class TokenRequest(BaseModel):
 
 
 def issue_token(user_id: str) -> str:
+    settings = get_settings()
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(hours=JWT_HOURS)).timestamp()),
+        "exp": int((now + timedelta(hours=settings.jwt_hours)).timestamp()),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
 def user_from_authorization(authorization: str | None = Header(None)) -> str:
+    settings = get_settings()
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Missing Authorization: Bearer <jwt>")
     token = authorization.split(" ", 1)[1].strip()
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired. Sign in again.")
     except jwt.InvalidTokenError:
