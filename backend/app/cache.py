@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from typing import Any
 
 import redis.asyncio as redis
@@ -13,7 +12,6 @@ log = logging.getLogger(__name__)
 
 KEY_PREFIX = "agenticrag:answer"
 INDEX_VERSION_KEY = "agenticrag:index_version"
-TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "900"))
 
 
 def normalize_query(q: str) -> str:
@@ -26,8 +24,9 @@ def build_cache_key(user_id: str, session_id: str, index_version: str, message: 
 
 
 class AnswerCache:
-    def __init__(self, client: redis.Redis | None):
+    def __init__(self, client: redis.Redis | None, ttl_seconds: int = 900):
         self._r = client
+        self._ttl = ttl_seconds
 
     @property
     def enabled(self) -> bool:
@@ -51,7 +50,7 @@ class AnswerCache:
             return
         payload = json.dumps({"answer": answer, "citations": citations})
         try:
-            await self._r.set(key, payload, ex=TTL_SECONDS)
+            await self._r.set(key, payload, ex=self._ttl)
         except RedisError as e:
             log.warning("Redis SET failed (%s)", e)
 
@@ -76,8 +75,7 @@ class AnswerCache:
         return deleted
 
 
-async def connect_redis() -> redis.Redis | None:
-    url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+async def connect_redis(url: str) -> redis.Redis | None:
     client = redis.from_url(url, decode_responses=True)
     try:
         await client.ping()
