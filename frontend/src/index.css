@@ -71,14 +71,26 @@ header {
   background: var(--panel);
 }
 .auth { display: flex; gap: 8px; align-items: center; }
-.auth input {
-  width: 120px;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
+.who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 13px;
 }
+.who small { color: var(--muted); font-size: 11px; }
+.gate {
+  max-width: 480px;
+  margin: 12vh auto;
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.gate h1 { font-size: 18px; margin: 0 0 8px; }
+.gate p { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.gate-error { color: #f07178 !important; }
+.gate-hint { font-size: 12px !important; }
+.gate .primary { margin-top: 8px; height: 40px; }
 header h1 { font-size: 16px; font-weight: 600; margin: 0; }
 header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 button.ghost {

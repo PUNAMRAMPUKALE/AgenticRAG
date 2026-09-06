@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,9 +18,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://agenticrag:agenticrag@127.0.0.1:5432/agenticrag"
     redis_url: str = "redis://127.0.0.1:6379/0"
     cache_ttl_seconds: int = 900
-    jwt_secret: str = "dev-only-change-me"
-    jwt_hours: int = 12
-    auth_allow_dev_login: bool = True
+    oidc_issuer: str = "http://127.0.0.1:8080/realms/agenticrag"
+    oidc_audience: str = "agenticrag-api"
+    oidc_spa_client_id: str = "agenticrag-spa"
+    oidc_jwks_url: str = ""
     cors_origins: str = (
         "http://localhost:5173,http://127.0.0.1:5173,"
         "http://localhost:5174,http://127.0.0.1:5174,"
@@ -30,12 +32,13 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def require_production_guards(self) -> None:
+        if not self.oidc_issuer.strip() or not self.oidc_audience.strip():
+            raise RuntimeError("OIDC_ISSUER and OIDC_AUDIENCE are required")
         if self.environment.lower() != "production":
             return
-        if self.jwt_secret in ("", "dev-only-change-me"):
-            raise RuntimeError("Set JWT_SECRET to a strong value when ENVIRONMENT=production")
-        if self.auth_allow_dev_login:
-            raise RuntimeError("Set AUTH_ALLOW_DEV_LOGIN=false when ENVIRONMENT=production")
+        parsed = urlparse(self.oidc_issuer)
+        if parsed.scheme != "https":
+            raise RuntimeError("OIDC_ISSUER must use https when ENVIRONMENT=production")
 
 
 @lru_cache
