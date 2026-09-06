@@ -2,7 +2,7 @@
 
 Repo: [PUNAMRAMPUKALE/AgenticRAG](https://github.com/PUNAMRAMPUKALE/AgenticRAG)
 
-Ask fund-doc questions in React. FastAPI retrieves cited snippets. Answers are cached in **Redis** so every API replica shares the same hits.
+Ask fund-doc questions in React. FastAPI retrieves cited snippets. **Conversations are stored in SQLite** (`backend/data/conversations.db`) so they survive an API restart. Answers are cached in **Redis** so every API replica shares the same hits.
 
 Cache key: `user_id` (from JWT) + `session_id` + normalized question + `index_version`. TTL default **15 minutes**. `POST /v1/reindex` reloads files, bumps `index_version`, and flushes Redis answers.
 
@@ -41,5 +41,6 @@ Open the Vite URL. You are signed in as `analyst-1` (demo JWT). Ask a question, 
 
 1. “What is the redemption notice period?” → 30 calendar days
 2. Same question again → green Redis-hit banner
-3. **New chat** → new session, miss
-4. After editing a file in `backend/knowledge`, `POST /v1/reindex` with the same Bearer token → old cache cannot be reused (`index_version` changed)
+3. **New chat** then ask another question — two rows in the sidebar
+4. Stop uvicorn, start it again, refresh the UI — the same chats are still listed (SQLite)
+5. After editing a file in `backend/knowledge`, `POST /v1/reindex` with the same Bearer token → old cache cannot be reused (`index_version` changed)

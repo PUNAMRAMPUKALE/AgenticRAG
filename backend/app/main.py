@@ -17,13 +17,14 @@ from app.agent import generate_answer
 from app.auth import TokenRequest, issue_token, user_from_authorization
 from app.cache import AnswerCache, TTL_SECONDS, build_cache_key, connect_redis
 from app.ingest import ingest_knowledge
-from app.models import Conversation, Message
+from app.models import Message
+from app.store import ConversationStore
 
 _root = Path(__file__).resolve().parents[2]
 load_dotenv(_root / ".env")
 load_dotenv()
 
-conversations: dict[str, Conversation] = {}
+store = ConversationStore()
 chunks = []
 index = None
 index_version = ""
@@ -40,6 +41,7 @@ async def lifespan(_app: FastAPI):
     yield
     if client is not None:
         await client.aclose()
+    store.close()
 
 
 app = FastAPI(title="Fintech AI MVP", version="0.2.0", lifespan=lifespan)
@@ -73,7 +75,7 @@ def health():
         "redis": cache.enabled,
         "cache_ttl_seconds": TTL_SECONDS,
         "llm_enabled": bool(os.getenv("LLM_API_KEY", "").strip()),
-        "conversations": len(conversations),
+        "conversations": store.count(),
     }
 
 
@@ -102,23 +104,13 @@ async def reindex(user_id: str = Depends(user_from_authorization)):
 
 @app.get("/v1/conversations")
 def list_conversations(user_id: str = Depends(user_from_authorization)):
-    mine = [c for c in conversations.values() if c.user_id == user_id]
-    return {
-        "conversations": [
-            {
-                "session_id": c.session_id,
-                "title": c.title,
-                "message_count": len(c.messages),
-            }
-            for c in reversed(mine)
-        ]
-    }
+    return {"conversations": store.list_for_user(user_id)}
 
 
 @app.get("/v1/conversations/{session_id}")
 def get_conversation(session_id: str, user_id: str = Depends(user_from_authorization)):
-    conv = conversations.get(session_id)
-    if not conv or conv.user_id != user_id:
+    conv = store.get(session_id, user_id)
+    if not conv:
         raise HTTPException(404, "Conversation not found")
     return {
         "session_id": conv.session_id,
@@ -139,12 +131,11 @@ async def chat(body: ChatRequest, user_id: str = Depends(user_from_authorization
     new_session = not body.session_id
     if new_session:
         session_id = str(uuid.uuid4())
-        conv = Conversation(session_id=session_id, user_id=user_id, title=text[:60])
-        conversations[session_id] = conv
+        store.create(session_id, user_id, text[:60])
     else:
         session_id = body.session_id
-        conv = conversations.get(session_id)
-        if not conv or conv.user_id != user_id:
+        existing = store.get(session_id, user_id)
+        if not existing:
             raise HTTPException(404, "Conversation not found. Start a new chat.")
 
     cache_key = build_cache_key(user_id, session_id, index_version, text)
@@ -164,9 +155,10 @@ async def chat(body: ChatRequest, user_id: str = Depends(user_from_authorization
 
         if cached:
             answer, citations = cached
-            conv.messages.append(Message(role="user", content=text))
-            conv.messages.append(
-                Message(role="assistant", content=answer, citations=citations, cache_hit=True)
+            store.add_message(session_id, Message(role="user", content=text))
+            store.add_message(
+                session_id,
+                Message(role="assistant", content=answer, citations=citations, cache_hit=True),
             )
             yield _sse({"type": "cache_hit", "value": True})
             yield _sse({"type": "token", "text": answer})
@@ -175,9 +167,9 @@ async def chat(body: ChatRequest, user_id: str = Depends(user_from_authorization
             return
 
         yield _sse({"type": "cache_hit", "value": False})
-        conv.messages.append(Message(role="user", content=text))
+        store.add_message(session_id, Message(role="user", content=text))
         answer, citations, used_llm = await generate_answer(text, index)
-        conv.messages.append(Message(role="assistant", content=answer, citations=citations))
+        store.add_message(session_id, Message(role="assistant", content=answer, citations=citations))
         await cache.set(cache_key, answer, citations)
         yield _sse({"type": "token", "text": answer})
         yield _sse({"type": "citations", "citations": citations})
