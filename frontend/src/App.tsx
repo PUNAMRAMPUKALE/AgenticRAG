@@ -1,4 +1,12 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { UserManager } from "oidc-client-ts";
+import {
+  completeSignInIfNeeded,
+  createUserManager,
+  fetchMe,
+  loadAuthConfig,
+  type Me,
+} from "./auth";
 
 type Citation = {
   file_id: string;
@@ -15,7 +23,11 @@ type ChatMessage = {
   cache_hit?: boolean;
 };
 
-const API = "";
+type ConvoSummary = {
+  session_id: string;
+  title: string;
+  message_count: number;
+};
 
 const HINTS = [
   "What is the redemption notice period?",
@@ -23,15 +35,24 @@ const HINTS = [
   "What is the liquidity gate limit?",
 ];
 
-type ConvoSummary = {
-  session_id: string;
-  title: string;
-  message_count: number;
-};
+async function accessToken(mgr: UserManager): Promise<string | null> {
+  let user = await mgr.getUser();
+  if (!user) return null;
+  if (user.expired) {
+    try {
+      user = await mgr.signinSilent();
+    } catch {
+      return null;
+    }
+  }
+  return user?.access_token ?? null;
+}
 
 export default function App() {
-  const [userId, setUserId] = useState("analyst-1");
-  const [token, setToken] = useState<string | null>(null);
+  const mgrRef = useRef<UserManager | null>(null);
+  const [ready, setReady] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversations, setConversations] = useState<ConvoSummary[]>([]);
@@ -41,67 +62,108 @@ export default function App() {
   const [redisOn, setRedisOn] = useState<boolean | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  async function signIn(id: string) {
-    const res = await fetch(`${API}/v1/auth/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: id.trim() || "analyst-1" }),
-    });
-    if (!res.ok) {
-      throw new Error(`Sign-in failed (${res.status})`);
-    }
-    const data = (await res.json()) as { access_token: string; user_id: string };
-    setToken(data.access_token);
-    setUserId(data.user_id);
-    localStorage.setItem("agenticrag_user", data.user_id);
-    localStorage.setItem("agenticrag_token", data.access_token);
-    return data.access_token;
-  }
+  const isAdmin = Boolean(me?.roles.includes("admin"));
 
-  async function loadConversations(auth = token) {
-    if (!auth) {
+  const loadConversations = useCallback(async () => {
+    const mgr = mgrRef.current;
+    if (!mgr) return;
+    const token = await accessToken(mgr);
+    if (!token) {
       setConversations([]);
       return;
     }
-    const res = await fetch(`${API}/v1/conversations`, {
-      headers: { Authorization: `Bearer ${auth}` },
+    const res = await fetch("/v1/conversations", {
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) return;
     const data = (await res.json()) as { conversations: ConvoSummary[] };
     setConversations(data.conversations);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cfg = await loadAuthConfig();
+        const mgr = createUserManager(cfg);
+        mgrRef.current = mgr;
+        const user = await completeSignInIfNeeded(mgr);
+        if (cancelled) return;
+        if (user?.access_token) {
+          const profile = await fetchMe(user.access_token);
+          if (cancelled) return;
+          setMe(profile);
+          await loadConversations();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setAuthError(err instanceof Error ? err.message : "Sign-in failed");
+          setMe(null);
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadConversations]);
+
+  async function signIn() {
+    const mgr = mgrRef.current;
+    if (!mgr) return;
+    await mgr.signinRedirect();
+  }
+
+  async function signOut() {
+    const mgr = mgrRef.current;
+    if (!mgr) return;
+    await mgr.signoutRedirect();
   }
 
   async function openConversation(id: string) {
+    const mgr = mgrRef.current;
+    if (!mgr) return;
+    const token = await accessToken(mgr);
     if (!token) return;
-    const res = await fetch(`${API}/v1/conversations/${id}`, {
+    const res = await fetch(`/v1/conversations/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) return;
-    const data = (await res.json()) as {
-      session_id: string;
-      messages: ChatMessage[];
-    };
+    const data = (await res.json()) as { session_id: string; messages: ChatMessage[] };
     setSessionId(data.session_id);
     setMessages(data.messages);
     setCacheBanner(null);
   }
 
-  useEffect(() => {
-    const savedUser = localStorage.getItem("agenticrag_user") || "analyst-1";
-    setUserId(savedUser);
-    void signIn(savedUser)
-      .then((t) => loadConversations(t))
-      .catch(() => setToken(null));
-  }, []);
+  async function reindex() {
+    const mgr = mgrRef.current;
+    if (!mgr) return;
+    const token = await accessToken(mgr);
+    if (!token) return;
+    const res = await fetch("/v1/reindex", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 403) {
+      setCacheBanner("Reindex requires the admin role.");
+      return;
+    }
+    if (!res.ok) {
+      setCacheBanner(`Reindex failed (${res.status}).`);
+      return;
+    }
+    const data = (await res.json()) as { index_version: string; flushed_keys: number };
+    setCacheBanner(`Reindexed. Version ${data.index_version}. Flushed ${data.flushed_keys} cache keys.`);
+  }
 
   async function send(text: string) {
     const q = text.trim();
-    if (!q || busy) return;
+    const mgr = mgrRef.current;
+    if (!q || busy || !mgr) return;
+    const token = await accessToken(mgr);
     if (!token) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: "Not signed in. Enter a user id and click Sign in. Is the API running?" },
-      ]);
+      setMessages((m) => [...m, { role: "assistant", content: "Session expired. Sign in again." }]);
       return;
     }
     setBusy(true);
@@ -111,7 +173,7 @@ export default function App() {
 
     let res: Response;
     try {
-      res = await fetch(`${API}/v1/chat`, {
+      res = await fetch("/v1/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -122,25 +184,26 @@ export default function App() {
     } catch {
       setMessages((m) => [
         ...m,
-        {
-          role: "assistant",
-          content:
-            "Could not reach the API. Start Redis (docker compose up -d redis), then uvicorn on port 8000.",
-        },
+        { role: "assistant", content: "Could not reach the API. Is uvicorn running on port 8000?" },
       ]);
       setBusy(false);
       return;
     }
     if (res.status === 401) {
-      setMessages((m) => [...m, { role: "assistant", content: "Token expired or invalid. Click Sign in." }]);
+      setMessages((m) => [...m, { role: "assistant", content: "Token expired or invalid. Sign in again." }]);
+      setBusy(false);
+      return;
+    }
+    if (res.status === 403) {
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: "You do not have the analyst role required to chat." },
+      ]);
       setBusy(false);
       return;
     }
     if (!res.ok || !res.body) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `Request failed (${res.status}). Is uvicorn running on port 8000?` },
-      ]);
+      setMessages((m) => [...m, { role: "assistant", content: `Request failed (${res.status}).` }]);
       setBusy(false);
       return;
     }
@@ -169,14 +232,10 @@ export default function App() {
         if (ev.type === "cache_hit") {
           hit = Boolean(ev.value);
           setCacheBanner(
-            hit
-              ? "Redis hit — same user, chat, question, and index version. No new search."
-              : null
+            hit ? "Redis hit — same user, chat, question, and index version. No new search." : null
           );
         }
-        if (ev.type === "token" && typeof ev.text === "string") {
-          assistant = ev.text;
-        }
+        if (ev.type === "token" && typeof ev.text === "string") assistant = ev.text;
         if (ev.type === "citations" && Array.isArray(ev.citations)) {
           citations = ev.citations as Citation[];
         }
@@ -187,7 +246,7 @@ export default function App() {
       ...m,
       {
         role: "assistant",
-        content: assistant || "No answer came back. Confirm uvicorn is running on port 8000.",
+        content: assistant || "No answer came back.",
         citations,
         cache_hit: hit,
       },
@@ -208,38 +267,56 @@ export default function App() {
     setCacheBanner(null);
   }
 
+  if (!ready) {
+    return (
+      <div className="gate">
+        <p>Checking session…</p>
+      </div>
+    );
+  }
+
+  if (!me) {
+    return (
+      <div className="gate">
+        <h1>Horizon Trust knowledge assistant</h1>
+        <p>Sign in with the identity provider (Authorization Code + PKCE). Tokens are validated by the API via JWKS.</p>
+        {authError ? <p className="gate-error">{authError}</p> : null}
+        <button className="primary" type="button" onClick={() => void signIn()}>
+          Sign in
+        </button>
+        <p className="gate-hint">
+          Local Keycloak: analyst / analyst-pass · analyst2 / analyst-pass · admin / admin-pass
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
       <header>
         <div>
           <h1>Horizon Trust knowledge assistant</h1>
           <p>
-            JWT + Redis cache (TTL). Repeat a question in this chat for a hit.
-            {sessionId ? ` Session ${sessionId.slice(0, 8)}…` : " New conversation"}
-            {redisOn === null ? "" : redisOn ? " · Redis on" : " · Redis off (in-process answers only, no shared cache)"}
+            OIDC access token · conversations keyed by subject
+            {sessionId ? ` · Session ${sessionId.slice(0, 8)}…` : " · New conversation"}
+            {redisOn === null ? "" : redisOn ? " · Redis on" : " · Redis off"}
           </p>
         </div>
         <div className="auth">
-          <input
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            aria-label="User id"
-            placeholder="user id"
-          />
-          <button
-            className="ghost"
-            type="button"
-            onClick={() => {
-              newChat();
-              void signIn(userId)
-                .then((t) => loadConversations(t))
-                .catch(() => setToken(null));
-            }}
-          >
-            Sign in
-          </button>
+          <span className="who">
+            {me.username}
+            <small>{me.roles.join(", ") || "no app roles"}</small>
+          </span>
+          {isAdmin ? (
+            <button className="ghost" type="button" onClick={() => void reindex()}>
+              Reindex
+            </button>
+          ) : null}
           <button className="ghost" type="button" onClick={newChat}>
             New chat
+          </button>
+          <button className="ghost" type="button" onClick={() => void signOut()}>
+            Sign out
           </button>
         </div>
       </header>
@@ -264,52 +341,52 @@ export default function App() {
           )}
         </aside>
         <div className="main">
-      <div className="thread" ref={listRef}>
-        {messages.length === 0 ? (
-          <p style={{ color: "var(--muted)" }}>
-            Sign in as analyst-1, ask a question, ask it again (Redis hit). Sign in as analyst-2 and
-            the same question is a miss — different user id in the cache key.
-          </p>
-        ) : null}
-        {messages.map((m, i) => (
-          <div className={`bubble ${m.role}`} key={i}>
-            <div className="body">{m.content}</div>
-            {m.citations && m.citations.length > 0 ? (
-              <div className="cites">
-                {m.citations.map((c) => (
-                  <div className="cite" key={c.file_id + c.snippet.slice(0, 12)}>
-                    <strong>{c.file_id}</strong> · {c.title} · {c.as_of} · score {c.score}
-                    <div>{c.snippet}</div>
-                  </div>
-                ))}
-              </div>
+          <div className="thread" ref={listRef}>
+            {messages.length === 0 ? (
+              <p style={{ color: "var(--muted)" }}>
+                Ask a fund-doc question. Repeat it in this chat for a Redis hit. Sign in as analyst2 to
+                confirm isolation. Only admin can reindex.
+              </p>
             ) : null}
+            {messages.map((m, i) => (
+              <div className={`bubble ${m.role}`} key={i}>
+                <div className="body">{m.content}</div>
+                {m.citations && m.citations.length > 0 ? (
+                  <div className="cites">
+                    {m.citations.map((c) => (
+                      <div className="cite" key={c.file_id + c.snippet.slice(0, 12)}>
+                        <strong>{c.file_id}</strong> · {c.title} · {c.as_of} · score {c.score}
+                        <div>{c.snippet}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="hints">
-        {HINTS.map((h) => (
-          <button key={h} type="button" disabled={busy} onClick={() => void send(h)}>
-            {h}
-          </button>
-        ))}
-      </div>
-      <form className="composer" onSubmit={onSubmit}>
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask about redemption, fees, or liquidity…"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send(draft);
-            }
-          }}
-        />
-        <button className="primary" type="submit" disabled={busy}>
-          {busy ? "…" : "Send"}
-        </button>
-      </form>
+          <div className="hints">
+            {HINTS.map((h) => (
+              <button key={h} type="button" disabled={busy} onClick={() => void send(h)}>
+                {h}
+              </button>
+            ))}
+          </div>
+          <form className="composer" onSubmit={onSubmit}>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Ask about redemption, fees, or liquidity…"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(draft);
+                }
+              }}
+            />
+            <button className="primary" type="submit" disabled={busy}>
+              {busy ? "…" : "Send"}
+            </button>
+          </form>
         </div>
       </div>
     </>

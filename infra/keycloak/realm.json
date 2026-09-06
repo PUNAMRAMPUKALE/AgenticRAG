@@ -1,0 +1,135 @@
+{
+  "realm": "agenticrag",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "roles": {
+    "realm": [
+      {
+        "name": "analyst",
+        "description": "Chat and manage own conversations"
+      },
+      {
+        "name": "admin",
+        "description": "Reindex knowledge corpus"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "analyst",
+      "enabled": true,
+      "email": "analyst@local.test",
+      "emailVerified": true,
+      "firstName": "Fund",
+      "lastName": "Analyst",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyst-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["analyst"]
+    },
+    {
+      "username": "analyst2",
+      "enabled": true,
+      "email": "analyst2@local.test",
+      "emailVerified": true,
+      "firstName": "Second",
+      "lastName": "Analyst",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyst-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["analyst"]
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@local.test",
+      "emailVerified": true,
+      "firstName": "Platform",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["analyst", "admin"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "agenticrag-api",
+      "name": "Agentic RAG API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "not-used-by-spa",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "bearerOnly": false
+    },
+    {
+      "clientId": "agenticrag-spa",
+      "name": "Agentic RAG SPA",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*",
+        "http://localhost:5174/*",
+        "http://127.0.0.1:5174/*",
+        "http://localhost:5175/*",
+        "http://127.0.0.1:5175/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+",
+        "oauth2.device.authorization.grant.enabled": "false"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
+      "optionalClientScopes": ["offline_access"],
+      "protocolMappers": [
+        {
+          "name": "audience-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "agenticrag-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -15,7 +15,7 @@ class ConversationRow(Base):
     __tablename__ = "conversations"
 
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str] = mapped_column(String(255), index=True)
     title: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     messages: Mapped[list[MessageRow]] = relationship(back_populates="conversation")
