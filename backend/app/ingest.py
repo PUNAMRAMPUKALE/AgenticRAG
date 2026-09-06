@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from app.models import Chunk
@@ -15,7 +16,16 @@ def _as_of_from_text(text: str) -> str:
     return "unknown"
 
 
-def ingest_knowledge() -> tuple[list[Chunk], SparseIndex]:
+def compute_index_version(knowledge_dir: Path = KNOWLEDGE_DIR) -> str:
+    """Fingerprint of all knowledge files. Changes when a doc is added, edited, or removed."""
+    h = hashlib.sha256()
+    for path in sorted(knowledge_dir.glob("*.md")):
+        h.update(path.name.encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def ingest_knowledge() -> tuple[list[Chunk], SparseIndex, str]:
     chunks: list[Chunk] = []
     for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
         text = path.read_text(encoding="utf-8")
@@ -34,4 +44,4 @@ def ingest_knowledge() -> tuple[list[Chunk], SparseIndex]:
                 )
             )
     index = SparseIndex(chunks)
-    return chunks, index
+    return chunks, index, compute_index_version()

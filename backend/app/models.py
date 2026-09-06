@@ -23,5 +23,6 @@ class Message:
 @dataclass
 class Conversation:
     session_id: str
+    user_id: str
     messages: list[Message] = field(default_factory=list)
     title: str = "New conversation"

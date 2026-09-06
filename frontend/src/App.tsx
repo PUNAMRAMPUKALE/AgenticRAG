@@ -1,4 +1,4 @@
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 type Citation = {
   file_id: string;
@@ -24,16 +24,48 @@ const HINTS = [
 ];
 
 export default function App() {
+  const [userId, setUserId] = useState("analyst-1");
+  const [token, setToken] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [cacheBanner, setCacheBanner] = useState<string | null>(null);
+  const [redisOn, setRedisOn] = useState<boolean | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  async function signIn(id: string) {
+    const res = await fetch(`${API}/v1/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: id.trim() || "analyst-1" }),
+    });
+    if (!res.ok) {
+      throw new Error(`Sign-in failed (${res.status})`);
+    }
+    const data = (await res.json()) as { access_token: string; user_id: string };
+    setToken(data.access_token);
+    setUserId(data.user_id);
+    localStorage.setItem("agenticrag_user", data.user_id);
+    localStorage.setItem("agenticrag_token", data.access_token);
+  }
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem("agenticrag_user") || "analyst-1";
+    setUserId(savedUser);
+    void signIn(savedUser).catch(() => setToken(null));
+  }, []);
 
   async function send(text: string) {
     const q = text.trim();
     if (!q || busy) return;
+    if (!token) {
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: "Not signed in. Enter a user id and click Sign in. Is the API running?" },
+      ]);
+      return;
+    }
     setBusy(true);
     setCacheBanner(null);
     setMessages((m) => [...m, { role: "user", content: q }]);
@@ -43,7 +75,10 @@ export default function App() {
     try {
       res = await fetch(`${API}/v1/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ message: q, session_id: sessionId }),
       });
     } catch {
@@ -52,9 +87,14 @@ export default function App() {
         {
           role: "assistant",
           content:
-            "Could not reach the API. In another terminal run: cd backend, activate .venv, then uvicorn app.main:app --reload --port 8000",
+            "Could not reach the API. Start Redis (docker compose up -d redis), then uvicorn on port 8000.",
         },
       ]);
+      setBusy(false);
+      return;
+    }
+    if (res.status === 401) {
+      setMessages((m) => [...m, { role: "assistant", content: "Token expired or invalid. Click Sign in." }]);
       setBusy(false);
       return;
     }
@@ -86,10 +126,15 @@ export default function App() {
         const ev = JSON.parse(line) as Record<string, unknown>;
         if (ev.type === "session" && typeof ev.session_id === "string") {
           setSessionId(ev.session_id);
+          if (typeof ev.redis === "boolean") setRedisOn(ev.redis);
         }
         if (ev.type === "cache_hit") {
           hit = Boolean(ev.value);
-          setCacheBanner(hit ? "Repeated question — reused the previous answer (no new search)." : null);
+          setCacheBanner(
+            hit
+              ? "Redis hit — same user, chat, question, and index version. No new search."
+              : null
+          );
         }
         if (ev.type === "token" && typeof ev.text === "string") {
           assistant = ev.text;
@@ -130,19 +175,39 @@ export default function App() {
         <div>
           <h1>Horizon Trust knowledge assistant</h1>
           <p>
-            MVP: ask about fund docs. New chat vs continue. Repeat a question to hit cache.
+            JWT + Redis cache (TTL). Repeat a question in this chat for a hit.
             {sessionId ? ` Session ${sessionId.slice(0, 8)}…` : " New conversation"}
+            {redisOn === null ? "" : redisOn ? " · Redis on" : " · Redis off (in-process answers only, no shared cache)"}
           </p>
         </div>
-        <button className="ghost" type="button" onClick={newChat}>
-          New chat
-        </button>
+        <div className="auth">
+          <input
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            aria-label="User id"
+            placeholder="user id"
+          />
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => {
+              newChat();
+              void signIn(userId).catch(() => setToken(null));
+            }}
+          >
+            Sign in
+          </button>
+          <button className="ghost" type="button" onClick={newChat}>
+            New chat
+          </button>
+        </div>
       </header>
       {cacheBanner ? <div className="banner">{cacheBanner}</div> : null}
       <div className="thread" ref={listRef}>
         {messages.length === 0 ? (
           <p style={{ color: "var(--muted)" }}>
-            Indexed sample filings: redemption policy, fee schedule, liquidity risk. Try a hint below.
+            Sign in as analyst-1, ask a question, ask it again (Redis hit). Sign in as analyst-2 and
+            the same question is a miss — different user id in the cache key.
           </p>
         ) : null}
         {messages.map((m, i) => (
