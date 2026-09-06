@@ -23,11 +23,18 @@ const HINTS = [
   "What is the liquidity gate limit?",
 ];
 
+type ConvoSummary = {
+  session_id: string;
+  title: string;
+  message_count: number;
+};
+
 export default function App() {
   const [userId, setUserId] = useState("analyst-1");
   const [token, setToken] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversations, setConversations] = useState<ConvoSummary[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [cacheBanner, setCacheBanner] = useState<string | null>(null);
@@ -48,12 +55,43 @@ export default function App() {
     setUserId(data.user_id);
     localStorage.setItem("agenticrag_user", data.user_id);
     localStorage.setItem("agenticrag_token", data.access_token);
+    return data.access_token;
+  }
+
+  async function loadConversations(auth = token) {
+    if (!auth) {
+      setConversations([]);
+      return;
+    }
+    const res = await fetch(`${API}/v1/conversations`, {
+      headers: { Authorization: `Bearer ${auth}` },
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { conversations: ConvoSummary[] };
+    setConversations(data.conversations);
+  }
+
+  async function openConversation(id: string) {
+    if (!token) return;
+    const res = await fetch(`${API}/v1/conversations/${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as {
+      session_id: string;
+      messages: ChatMessage[];
+    };
+    setSessionId(data.session_id);
+    setMessages(data.messages);
+    setCacheBanner(null);
   }
 
   useEffect(() => {
     const savedUser = localStorage.getItem("agenticrag_user") || "analyst-1";
     setUserId(savedUser);
-    void signIn(savedUser).catch(() => setToken(null));
+    void signIn(savedUser)
+      .then((t) => loadConversations(t))
+      .catch(() => setToken(null));
   }, []);
 
   async function send(text: string) {
@@ -155,6 +193,7 @@ export default function App() {
       },
     ]);
     setBusy(false);
+    void loadConversations();
     queueMicrotask(() => listRef.current?.scrollTo(0, listRef.current.scrollHeight));
   }
 
@@ -192,7 +231,9 @@ export default function App() {
             type="button"
             onClick={() => {
               newChat();
-              void signIn(userId).catch(() => setToken(null));
+              void signIn(userId)
+                .then((t) => loadConversations(t))
+                .catch(() => setToken(null));
             }}
           >
             Sign in
@@ -203,6 +244,26 @@ export default function App() {
         </div>
       </header>
       {cacheBanner ? <div className="banner">{cacheBanner}</div> : null}
+      <div className="shell">
+        <aside className="sidebar">
+          <p className="sidebar-label">Your conversations</p>
+          {conversations.length === 0 ? (
+            <p className="sidebar-empty">None yet. Send a message to create one.</p>
+          ) : (
+            conversations.map((c) => (
+              <button
+                type="button"
+                key={c.session_id}
+                className={c.session_id === sessionId ? "convo active" : "convo"}
+                onClick={() => void openConversation(c.session_id)}
+              >
+                <span>{c.title}</span>
+                <small>{c.message_count} messages</small>
+              </button>
+            ))
+          )}
+        </aside>
+        <div className="main">
       <div className="thread" ref={listRef}>
         {messages.length === 0 ? (
           <p style={{ color: "var(--muted)" }}>
@@ -249,6 +310,8 @@ export default function App() {
           {busy ? "…" : "Send"}
         </button>
       </form>
+        </div>
+      </div>
     </>
   );
 }

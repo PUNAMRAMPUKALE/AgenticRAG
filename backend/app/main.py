@@ -100,6 +100,21 @@ async def reindex(user_id: str = Depends(user_from_authorization)):
     }
 
 
+@app.get("/v1/conversations")
+def list_conversations(user_id: str = Depends(user_from_authorization)):
+    mine = [c for c in conversations.values() if c.user_id == user_id]
+    return {
+        "conversations": [
+            {
+                "session_id": c.session_id,
+                "title": c.title,
+                "message_count": len(c.messages),
+            }
+            for c in reversed(mine)
+        ]
+    }
+
+
 @app.get("/v1/conversations/{session_id}")
 def get_conversation(session_id: str, user_id: str = Depends(user_from_authorization)):
     conv = conversations.get(session_id)
