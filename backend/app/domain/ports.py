@@ -49,6 +49,7 @@ class AnswerGenerator(Protocol):
 
 
 class KnowledgeLoader(Protocol):
+    def fingerprint(self) -> str: ...
     def load(self) -> tuple[list[Chunk], SearchIndex, str]: ...
 
 

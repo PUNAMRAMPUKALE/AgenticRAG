@@ -31,6 +31,20 @@ class Settings(BaseSettings):
         "http://localhost:5174,http://127.0.0.1:5174,"
         "http://localhost:5175,http://127.0.0.1:5175"
     )
+    knowledge_watch: bool = True
+    knowledge_watch_debounce_ms: int = 800
+    knowledge_poll_seconds: float = 5.0
+    knowledge_source: str = "local"
+    knowledge_s3_bucket: str = ""
+    knowledge_s3_prefix: str = "knowledge"
+    knowledge_s3_region: str = ""
+    knowledge_s3_poll_seconds: float = 30.0
+    knowledge_s3_queue_url: str = ""
+    vespa_url: str = ""
+    llm_api_key: str = ""
+    llm_choice: str = "gpt-4o-mini"
+    llm_base_url: str = "https://api.openai.com/v1"
+    openai_embedding_model: str = "text-embedding-3-small"
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -53,6 +67,8 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "GOOGLE_CLIENT_ID is required. Create an OAuth 2.0 Web client in Google Cloud Console."
             )
+        if self.knowledge_source.strip().lower() == "s3" and not self.knowledge_s3_bucket.strip():
+            raise RuntimeError("KNOWLEDGE_S3_BUCKET is required when KNOWLEDGE_SOURCE=s3.")
 
 
 @lru_cache

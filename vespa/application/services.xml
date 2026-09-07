@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<services version="1.0">
+  <container id="default" version="1.0">
+    <search />
+    <document-api />
+    <http>
+      <server id="default" port="8080" />
+    </http>
+  </container>
+  <content id="knowledge" version="1.0">
+    <redundancy>1</redundancy>
+    <documents>
+      <document type="knowledge_chunk" mode="index" />
+    </documents>
+    <nodes>
+      <node distribution-key="0" hostalias="node1" />
+    </nodes>
+  </content>
+</services>

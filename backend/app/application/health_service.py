@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from app.core.config import Settings
@@ -19,6 +18,9 @@ class HealthStatus:
     cache_ttl_seconds: int
     llm_enabled: bool
     conversations: int
+    ingest_watch: bool
+    knowledge_source: str
+    embeddings: bool
 
 
 class HealthService:
@@ -47,6 +49,10 @@ class HealthService:
             docs_indexed=docs_indexed,
             index_version=index_version,
             cache_ttl_seconds=self._settings.cache_ttl_seconds,
-            llm_enabled=bool((os.getenv("LLM_API_KEY") or "").strip()),
+            llm_enabled=bool(self._settings.llm_api_key.strip()),
             conversations=await self._conversations.count() if pg_ok else 0,
+            ingest_watch=self._settings.knowledge_watch
+            or self._settings.knowledge_source.strip().lower() == "s3",
+            knowledge_source=self._settings.knowledge_source.strip().lower() or "local",
+            embeddings=bool(self._settings.llm_api_key.strip()),
         )

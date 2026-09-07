@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,6 +24,11 @@ load_dotenv(override=True)
 async def lifespan(app: FastAPI):
     container = await build_container(get_settings())
     app.state.container = container
+    if container.ingest_watcher is not None:
+        container.ingest_watcher.start(asyncio.get_running_loop())
+    if container.s3_pipeline is not None:
+        await container.s3_pipeline.sync_now()
+        container.s3_pipeline.start(asyncio.get_running_loop())
     yield
     await container.aclose()
 

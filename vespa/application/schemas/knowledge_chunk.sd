@@ -1,0 +1,44 @@
+schema knowledge_chunk {
+    document knowledge_chunk {
+        field chunk_id type string {
+            indexing: summary | attribute
+        }
+        field file_id type string {
+            indexing: summary | attribute
+        }
+        field title type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+        field text type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+        field as_of type string {
+            indexing: summary | attribute
+        }
+        field section type string {
+            indexing: index | summary | attribute
+            index: enable-bm25
+        }
+        field page type string {
+            indexing: summary | attribute
+        }
+        field doc_type type string {
+            indexing: summary | attribute
+        }
+        field strategy type string {
+            indexing: summary | attribute
+        }
+    }
+
+    fieldset default {
+        fields: title, text, section
+    }
+
+    rank-profile bm25 inherits default {
+        first-phase {
+            expression: bm25(text) + bm25(title) + bm25(section)
+        }
+    }
+}

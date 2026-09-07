@@ -10,6 +10,10 @@ class Chunk:
     title: str
     text: str
     as_of: str
+    section: str = ""
+    page: str = ""
+    doc_type: str = ""
+    strategy: str = ""
 
 
 @dataclass

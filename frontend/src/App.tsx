@@ -6,6 +6,8 @@ type Citation = {
   file_id: string;
   title: string;
   as_of: string;
+  section?: string;
+  page?: string;
   score: number;
   snippet: string;
 };
@@ -24,9 +26,9 @@ type ConvoSummary = {
 };
 
 const HINTS = [
-  "What is the redemption notice period?",
-  "What is the institutional expense ratio?",
-  "What is the liquidity gate limit?",
+  "What is the KYC client onboarding procedure?",
+  "What does the payment operations SOP require?",
+  "Summarize the Q2 2026 liquidity risk report.",
 ];
 
 function roleLabel(role: string): string {
@@ -318,8 +320,8 @@ export default function App() {
           <div className="thread" ref={listRef}>
             {messages.length === 0 ? (
               <p style={{ color: "var(--muted)" }}>
-                Ask a fund-doc question. Repeat it in this chat for a Redis hit. Managers (experts)
-                listed in GOOGLE_MANAGER_EMAILS can reindex.
+                Ask about the Northstar knowledge corpus. Drop or edit files under backend/knowledge
+                and they are chunked automatically. Managers can still force Reindex.
               </p>
             ) : null}
             {messages.map((m, i) => (
@@ -329,7 +331,8 @@ export default function App() {
                   <div className="cites">
                     {m.citations.map((c) => (
                       <div className="cite" key={c.file_id + c.snippet.slice(0, 12)}>
-                        <strong>{c.file_id}</strong> · {c.title} · {c.as_of} · score {c.score}
+                        <strong>{c.file_id}</strong> · {c.title} · {c.as_of}
+                        {c.section ? ` · ${c.section}` : ""} · score {c.score}
                         <div>{c.snippet}</div>
                       </div>
                     ))}

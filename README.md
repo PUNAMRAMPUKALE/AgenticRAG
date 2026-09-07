@@ -1,6 +1,6 @@
 # Agentic RAG
 
-Postgres for conversation history. Redis for answer cache and login sessions. **Sign in with Google** is authentication. Authorization uses three roles: **analyst**, **senior analyst**, and **manager (expert)**. All three can chat. Only managers can reindex.
+Postgres for conversation history. Redis for answer cache and login sessions. **Sign in with Google** is authentication. Authorization uses three roles: **analyst**, **senior analyst**, and **manager (expert)**. All three can chat. Knowledge under `backend/knowledge/` is chunked automatically on file create, update, and delete. Managers can still force reindex.
 
 ## Architecture
 
@@ -13,6 +13,30 @@ Postgres for conversation history. Redis for answer cache and login sessions. **
 | Cross-cutting | `app.core` | Settings, errors, request middleware |
 
 `uvicorn app.main:app` is the composition root.
+
+## Knowledge ingest
+
+**Local (development):** drop markdown, PDF, or Excel into `backend/knowledge/`. The API watches that directory, re-chunks on create/update/delete, rebuilds the TF-IDF index, and flushes the answer cache.
+
+**Production (S3):** the bucket is the only document store. The API lists objects, downloads bytes into memory, chunks them, and builds TF-IDF in RAM. It does **not** copy the corpus onto disk. `backend/knowledge/` is only for local development (`KNOWLEDGE_SOURCE=local`).
+
+```
+Author / CMS  →  S3 (original PDFs / markdown / Excel)
+                     │
+                     ├─ list objects + version stamps every N seconds
+                     └─ optional SQS on upload/delete
+                              │
+                              ▼
+                     App process: GetObject → clean → hybrid chunk → TF-IDF → flush Redis
+```
+
+Cleaning: Unicode NFKC, strip control chars, collapse whitespace, repair PDF hyphen/line wrap, drop empty or low-signal extracts.
+
+Chunking (hybrid by file type): Markdown headings then recursive; PDF per page then recursive; Excel row groups with headers repeated; other text recursive (LangChain RecursiveCharacterTextSplitter separator order). Size 1200 / overlap 180. Semantic/LLM splitters are not used in ingest (they need an embedding call per sentence). Vector DB / Chroma is later; search is still TF-IDF.
+
+Use an IAM role (or AWS env credentials). Do not put access keys in git.
+
+`POST /v1/reindex` remains a manual force rebuild for managers.
 
 ## Google Cloud (once)
 
@@ -62,7 +86,7 @@ Google authenticates the person. The app assigns one role (highest match wins):
 | `GET /health`, `GET /v1/auth/config` | Public |
 | `POST /v1/auth/google` | Google ID token |
 | Chat and conversations | analyst, senior analyst, or manager |
-| `POST /v1/reindex` | manager (expert) — `GOOGLE_MANAGER_EMAILS` |
+| `POST /v1/reindex` | manager (expert) — optional force rebuild; ingest also runs automatically |
 
 Conversations are stored under Google `sub`.
 
@@ -77,10 +101,15 @@ GOOGLE_ANALYST_EMAILS=
 GOOGLE_ALLOWED_DOMAIN=yourcompany.com
 DATABASE_URL=postgresql+asyncpg://...
 REDIS_URL=redis://...
+KNOWLEDGE_SOURCE=s3
+KNOWLEDGE_S3_BUCKET=your-company-knowledge
+KNOWLEDGE_S3_PREFIX=knowledge
+KNOWLEDGE_S3_REGION=us-east-1
+KNOWLEDGE_S3_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123/knowledge-events
 ```
 
 Add your production HTTPS origin to the Google OAuth client. Serve UI and API on the same site so the session cookie is first-party.
 
 ## What is still later
 
-Dense/hybrid pgvector search, Alembic in CI, MCP, HITL. Retrieval is still TF-IDF over sample markdown.
+Dense/hybrid pgvector search, Alembic in CI, MCP, HITL. Retrieval is still TF-IDF over the knowledge corpus.

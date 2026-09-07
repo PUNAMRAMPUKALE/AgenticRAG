@@ -18,6 +18,8 @@ def retrieve(index: SearchIndex, query: str, k: int = 4) -> tuple[str, list[dict
             "file_id": chunk.file_id,
             "title": chunk.title,
             "as_of": chunk.as_of,
+            "section": chunk.section,
+            "page": chunk.page,
             "score": round(score, 3),
             "snippet": chunk.text[:280],
         }

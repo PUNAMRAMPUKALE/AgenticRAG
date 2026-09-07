@@ -26,5 +26,13 @@ services:
       timeout: 3s
       retries: 10
 
+  vespa:
+    image: vespaengine/vespa
+    profiles: ["vespa"]
+    hostname: vespa-container
+    ports:
+      - "8080:8080"
+      - "19071:19071"
+
 volumes:
   agenticrag_pg:
