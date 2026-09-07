@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 
@@ -41,7 +42,7 @@ def extractive_answer(formatted: str, citations: list[dict]) -> str:
 
 class KnowledgeAssistant:
     async def generate(self, query: str, index: SearchIndex) -> tuple[str, list[dict], bool]:
-        formatted, citations = retrieve(index, query)
+        formatted, citations = await asyncio.to_thread(retrieve, index, query)
         api_key = os.getenv("LLM_API_KEY", "").strip()
         if not api_key:
             return extractive_answer(formatted, citations), citations, False
@@ -71,7 +72,7 @@ class KnowledgeAssistant:
         @agent.tool
         async def retrieve_relevant_documents(ctx: RunContext[AgentDeps], q: str) -> str:
             """Retrieve relevant document chunks from the Horizon Trust knowledge base."""
-            text, _ = retrieve(ctx.deps.index, q)
+            text, _ = await asyncio.to_thread(retrieve, ctx.deps.index, q)
             return text
 
         result = await agent.run(query, deps=AgentDeps(index=index))

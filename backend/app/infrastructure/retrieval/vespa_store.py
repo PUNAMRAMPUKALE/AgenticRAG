@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import re
 import time
 import uuid
 import zipfile
@@ -232,6 +233,80 @@ class VespaChunkStore:
             return chunks, None
         return chunks, np.asarray(vectors, dtype=np.float32)
 
+    def search_chunks(
+        self,
+        query: str,
+        k: int = 4,
+        *,
+        classification: str = "internal",
+        tenant_id: str = "default",
+        corpus_id: str = "horizon_trust",
+    ) -> list[tuple[Chunk, float]]:
+        """Live retrieval in Vespa (HNSW + BM25). Does not load the corpus into RAM."""
+        from app.infrastructure.llm.embeddings import get_embedder
+
+        if not query.strip() or not self._base:
+            return []
+        embedder = get_embedder()
+        tenant_id = _safe_token(tenant_id, "default")
+        corpus_id = _safe_token(corpus_id, "horizon_trust")
+        classification = _safe_token(classification, "internal")
+        k = max(1, min(int(k), 20))
+        yql = (
+            "select * from knowledge_chunk where "
+            f'tenant_id contains "{tenant_id}" and corpus_id contains "{corpus_id}" '
+            f'and classification contains "{classification}" and '
+            f"(userQuery() or ({{targetHits:{k}}}nearestNeighbor(embedding, q_emb)))"
+        )
+        body: dict = {
+            "yql": yql,
+            "query": query,
+            "hits": k,
+            "ranking": "hybrid",
+            "timeout": "5s",
+        }
+        if embedder:
+            vector = embedder.embed([query])
+            if vector.size:
+                body["input.query(q_emb)"] = {"values": [float(x) for x in vector[0].tolist()]}
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.post(f"{self._base}/search/", json=body)
+        except httpx.HTTPError:
+            log.exception("Vespa search failed")
+            return []
+        if response.status_code >= 400:
+            log.warning("Vespa search HTTP %s: %s", response.status_code, response.text[:400])
+            return []
+        hits: list[tuple[Chunk, float]] = []
+        for hit in (response.json().get("root") or {}).get("children") or []:
+            fields = hit.get("fields") or {}
+            chunk = Chunk(
+                chunk_id=str(fields.get("chunk_id") or ""),
+                file_id=str(fields.get("file_id") or ""),
+                title=str(fields.get("title") or ""),
+                text=str(fields.get("text") or ""),
+                as_of=str(fields.get("as_of") or ""),
+                section=str(fields.get("section") or ""),
+                page=str(fields.get("page") or ""),
+                doc_type=str(fields.get("doc_type") or ""),
+                strategy=str(fields.get("strategy") or ""),
+            )
+            hits.append((chunk, float(hit.get("relevance") or 0)))
+        return hits
+
+    def count_chunks(self) -> int:
+        if not self._base:
+            return 0
+        with httpx.Client(timeout=15.0) as client:
+            response = client.post(
+                f"{self._base}/search/",
+                json={"yql": "select * from knowledge_chunk where true", "hits": 0, "timeout": "5s"},
+            )
+        if response.status_code >= 400:
+            return 0
+        return int(((response.json().get("root") or {}).get("fields") or {}).get("totalCount") or 0)
+
     async def _delete_selection(self, doc_type: str, selection: str) -> None:
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.delete(
@@ -265,6 +340,13 @@ class VespaChunkStore:
                 if not continuation:
                     break
         return out
+
+
+def _safe_token(value: str, default: str) -> str:
+    token = (value or default).strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", token):
+        return default
+    return token
 
 
 def _tensor_values(raw: object) -> list[float]:

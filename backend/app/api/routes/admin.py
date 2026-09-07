@@ -32,5 +32,5 @@ async def knowledge_snapshot(
     principal: Principal = Depends(require_any_role(*CHAT_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
-    """Inspect stored chunks and metadata (in-memory index today; Vespa later)."""
-    return container.knowledge.snapshot(file_id=file_id, offset=offset, limit=limit)
+    """Inspect chunks stored in Vespa (paginated)."""
+    return await container.knowledge.snapshot(file_id=file_id, offset=offset, limit=limit)

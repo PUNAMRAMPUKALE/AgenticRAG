@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
 from app.domain.models import Conversation, ConversationSummary, Message
+from app.infrastructure.persistence.migrate import run_alembic_upgrade
 from app.infrastructure.persistence.orm import (
-    Base,
     ConversationRow,
     MessageRow,
     QueryRequestRow,
@@ -21,6 +22,7 @@ from app.infrastructure.persistence.rls import apply_rls, apply_row_context
 
 class PostgresConversationRepository:
     def __init__(self, settings: Settings):
+        self._settings = settings
         self.engine: AsyncEngine = create_async_engine(
             settings.database_url,
             pool_pre_ping=True,
@@ -29,10 +31,21 @@ class PostgresConversationRepository:
         )
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
 
+        @event.listens_for(self.engine.sync_engine, "checkout")
+        def _reset_role(dbapi_connection, connection_record, connection_proxy) -> None:
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("RESET ROLE")
+            finally:
+                cursor.close()
+
     async def init_schema(self) -> None:
+        if self._settings.migrate_on_boot:
+            admin = self._settings.database_admin_url.strip() or self._settings.database_url
+            await asyncio.to_thread(run_alembic_upgrade, admin)
         async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
             await apply_rls(conn)
+
 
     async def ping(self) -> bool:
         try:

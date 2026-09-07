@@ -11,13 +11,18 @@ from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.application.container import build_container
+from app.core.aws import load_optional_secrets
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 
 _root = Path(__file__).resolve().parents[2]
 load_dotenv(_root / ".env", override=True)
 load_dotenv(override=True)
+load_optional_secrets()
+get_settings.cache_clear()
+configure_logging()
 
 
 @asynccontextmanager

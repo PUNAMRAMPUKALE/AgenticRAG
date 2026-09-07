@@ -49,19 +49,19 @@ class AppContainer:
         await self.conversations.close()
 
 
-async def build_container(settings: Settings) -> AppContainer:
+async def build_container(settings: Settings, *, run_ingest: bool | None = None) -> AppContainer:
     settings.require_production_guards()
     conversations = PostgresConversationRepository(settings)
     await conversations.init_schema()
     if not await conversations.ping():
         raise RuntimeError(
-            "PostgreSQL is unavailable. From the repo root run: docker compose up -d postgres redis"
+            "PostgreSQL is unavailable. From the repo root run: docker compose up -d postgres redis vespa"
         )
 
     redis_client = await connect_redis(settings.redis_url)
     if redis_client is None:
         raise RuntimeError(
-            "Redis is unavailable. From the repo root run: docker compose up -d postgres redis"
+            "Redis is unavailable. From the repo root run: docker compose up -d postgres redis vespa"
         )
     cache = RedisAnswerCache(redis_client, ttl_seconds=settings.cache_ttl_seconds)
     source = settings.knowledge_source.strip().lower() or "local"
@@ -96,7 +96,8 @@ async def build_container(settings: Settings) -> AppContainer:
     generator = KnowledgeAssistant()
     ingest_watcher: KnowledgeIngestWatcher | None = None
     s3_pipeline: KnowledgeS3Pipeline | None = None
-    if source == "s3":
+    start_ingest = settings.ingest_in_api if run_ingest is None else run_ingest
+    if source == "s3" and start_ingest:
         s3_pipeline = KnowledgeS3Pipeline(
             knowledge,
             poll_seconds=settings.knowledge_s3_poll_seconds,
@@ -120,8 +121,9 @@ async def build_container(settings: Settings) -> AppContainer:
         knowledge=knowledge,
         chat=ChatService(conversations, cache, generator),
         conversation_queries=ConversationService(conversations),
-        health=HealthService(settings, conversations, cache, identity),
+        health=HealthService(settings, conversations, cache, identity, vespa),
         redis_client=redis_client,
         ingest_watcher=ingest_watcher,
         s3_pipeline=s3_pipeline,
     )
+

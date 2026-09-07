@@ -45,6 +45,11 @@ class KnowledgeService:
         self.ingesting: bool = False
         self.last_changed_files: int = 0
         self.last_reused_files: int = 0
+        self.docs_indexed: int = 0
+        if vector_store is not None:
+            from app.infrastructure.retrieval.vespa_index import VespaSearchIndex
+
+            self.index = VespaSearchIndex(vector_store)
 
     def load(self) -> None:
         self.chunks, self.index, self.index_version = self._loader.load()
@@ -87,10 +92,12 @@ class KnowledgeService:
             self.index_version = result.version
             self.last_changed_files = result.changed_files
             self.last_reused_files = result.reused_files
+            self.docs_indexed = result.docs_indexed
         else:
             self.chunks, self.index, self.index_version = await asyncio.to_thread(self._loader.load)
             self.last_changed_files = 0
             self.last_reused_files = 0
+            self.docs_indexed = len(self.chunks)
         flushed = 0
         if self.last_changed_files or actor.startswith("reindex"):
             flushed = await self._cache.flush_answers()
@@ -110,34 +117,37 @@ class KnowledgeService:
                 files_rechunked=self.last_changed_files,
                 files_reused=self.last_reused_files,
                 files_deleted=0,
-                chunks_indexed=len(self.chunks),
+                chunks_indexed=self.docs_indexed,
             )
         log.info(
             "Knowledge ingest: %s chunks, version %s, flushed %s cache keys (%s)",
-            len(self.chunks),
+            self.docs_indexed,
             self.index_version,
             flushed,
             actor,
         )
         return ReindexResult(
             index_version=self.index_version,
-            docs_indexed=len(self.chunks),
+            docs_indexed=self.docs_indexed,
             flushed_keys=flushed,
             reindexed_by=actor,
         )
 
-    def snapshot(self, *, file_id: str | None = None, offset: int = 0, limit: int = 50) -> dict:
-        rows = self.chunks
+    async def snapshot(self, *, file_id: str | None = None, offset: int = 0, limit: int = 50) -> dict:
+        chunks = self.chunks
+        if not chunks and self._vector_store is not None:
+            chunks, _ = await self._vector_store.load_all()
+        rows = chunks
         if file_id:
             rows = [c for c in rows if c.file_id == file_id]
         limit = min(max(limit, 1), 200)
         offset = max(offset, 0)
         files: dict[str, int] = {}
-        for chunk in self.chunks:
+        for chunk in chunks:
             files[chunk.file_id] = files.get(chunk.file_id, 0) + 1
         return {
             "index_version": self.index_version,
-            "chunk_count": len(self.chunks),
+            "chunk_count": len(chunks),
             "file_count": len(files),
             "files": [{"file_id": k, "chunks": v} for k, v in sorted(files.items())],
             "offset": offset,
@@ -145,3 +155,9 @@ class KnowledgeService:
             "filtered_count": len(rows),
             "chunks": [chunk_record(c) for c in rows[offset : offset + limit]],
         }
+
+    def live_chunk_count(self) -> int:
+        if self._vector_store is not None:
+            return self._vector_store.count_chunks()
+        return self.docs_indexed or len(self.chunks)
+

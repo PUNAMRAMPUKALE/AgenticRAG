@@ -5,13 +5,13 @@ import json
 import logging
 from urllib.parse import unquote_plus
 
-from app.application.knowledge_service import KnowledgeService
+from app.infrastructure.aws import boto_client
 
 log = logging.getLogger(__name__)
 
 
 class KnowledgeS3Pipeline:
-    """Poll S3 (and optionally SQS). Rebuild in-memory chunks when the bucket changes."""
+    """Poll S3 (and optionally SQS). Incremental chunk+embed into Vespa."""
 
     def __init__(
         self,
@@ -50,12 +50,7 @@ class KnowledgeS3Pipeline:
             return
 
     def _sqs(self):
-        import boto3
-
-        kwargs = {}
-        if self._region:
-            kwargs["region_name"] = self._region
-        return boto3.client("sqs", **kwargs)
+        return boto_client("sqs", self._region)
 
     async def _drain_queue(self) -> None:
         def _receive() -> list[dict]:

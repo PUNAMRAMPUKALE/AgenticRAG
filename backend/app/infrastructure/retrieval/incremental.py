@@ -11,7 +11,7 @@ import numpy as np
 from app.domain.models import Chunk
 from app.infrastructure.llm.embeddings import get_embedder
 from app.infrastructure.retrieval.ingest import ingest_bytes
-from app.infrastructure.retrieval.sparse import SparseIndex
+from app.infrastructure.retrieval.vespa_index import VespaSearchIndex
 
 log = logging.getLogger(__name__)
 
@@ -27,10 +27,11 @@ def stamp_fingerprint(stamps: dict[str, str]) -> str:
 @dataclass
 class IncrementalResult:
     chunks: list[Chunk]
-    index: SparseIndex
+    index: VespaSearchIndex
     version: str
     changed_files: int
     reused_files: int
+    docs_indexed: int
 
 
 async def sync_incremental(
@@ -77,21 +78,19 @@ async def sync_incremental(
         await store.replace_source(key, remote[key], model, chunks, vectors)
         log.info("Re-chunked and stored %s (%s chunks)", key, len(chunks))
 
-    chunks, dense = await store.load_all()
-    if dense is None and embedder and chunks:
-        dense = await asyncio.to_thread(embedder.embed, [c.text for c in chunks])
-        log.warning("Persisted embeddings missing; re-embedded %s chunks", len(chunks))
-    index = SparseIndex(chunks, embedder=embedder, dense=dense)
+    index = VespaSearchIndex(store)
+    docs_indexed = store.count_chunks() if hasattr(store, "count_chunks") else 0
     log.info(
-        "Knowledge index: %s chunks, %s files re-chunked, %s files reused from Vespa",
-        len(chunks),
+        "Vespa search ready: %s chunks indexed, %s files re-chunked, %s reused",
+        docs_indexed,
         len(changed),
         reused,
     )
     return IncrementalResult(
-        chunks=chunks,
+        chunks=[],
         index=index,
         version=fingerprint,
         changed_files=len(changed),
         reused_files=reused,
+        docs_indexed=docs_indexed,
     )

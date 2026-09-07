@@ -8,6 +8,7 @@ from app.infrastructure.retrieval.corpus import SUPPORTED_SUFFIXES
 from app.infrastructure.retrieval.ingest import ingest_bytes
 from app.infrastructure.retrieval.incremental import stamp_fingerprint
 from app.infrastructure.retrieval.sparse import SparseIndex, build_index
+from app.infrastructure.aws import boto_client
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +40,7 @@ class S3CorpusLoader:
         self._region = region or None
 
     def _client(self):
-        import boto3
-
-        kwargs = {}
-        if self._region:
-            kwargs["region_name"] = self._region
-        return boto3.client("s3", **kwargs)
+        return boto_client("s3", self._region)
 
     def _object_key(self, relative: str) -> str:
         if self._prefix:

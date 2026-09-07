@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     knowledge_s3_queue_url: str = ""
     vespa_url: str = "http://127.0.0.1:8080"
     vespa_config_url: str = "http://127.0.0.1:19071"
+    ingest_in_api: bool = True
+    migrate_on_boot: bool = True
+    database_admin_url: str = ""
+    aws_secrets_arn: str = ""
     llm_api_key: str = ""
     llm_choice: str = "gpt-4o-mini"
     llm_base_url: str = "https://api.openai.com/v1"

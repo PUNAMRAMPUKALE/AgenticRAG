@@ -13,11 +13,16 @@ router = APIRouter(tags=["ops"])
 @router.get("/health")
 async def health(request: Request):
     container: AppContainer = get_container(request)
+    knowledge = container.knowledge
+    docs = knowledge.live_chunk_count()
+    knowledge.docs_indexed = docs
+    ingest_watch = container.s3_pipeline is not None or container.ingest_watcher is not None
     status = await container.health.status(
-        docs_indexed=len(container.knowledge.chunks),
-        index_version=container.knowledge.index_version,
-        ingesting=container.knowledge.ingesting or container.knowledge.index is None,
-        files_rechunked=container.knowledge.last_changed_files,
-        files_reused=container.knowledge.last_reused_files,
+        docs_indexed=docs,
+        index_version=knowledge.index_version,
+        ingesting=knowledge.ingesting,
+        files_rechunked=knowledge.last_changed_files,
+        files_reused=knowledge.last_reused_files,
+        ingest_watch=ingest_watch,
     )
     return asdict(status)

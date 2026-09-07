@@ -9,34 +9,34 @@ Postgres for conversation history. Redis for answer cache and login sessions. **
 | Presentation | `app.api` | Routes, session cookie, SSE |
 | Application | `app.application` | Chat, conversations, reindex, health |
 | Domain | `app.domain` | Entities, `Principal`, ports |
-| Infrastructure | `app.infrastructure` | Postgres, Redis, Google ID tokens, TF-IDF, Pydantic AI |
+| Infrastructure | `app.infrastructure` | Postgres (RLS), Redis, Google ID tokens, S3, Vespa, Pydantic AI |
 | Cross-cutting | `app.core` | Settings, errors, request middleware |
 
-`uvicorn app.main:app` is the composition root.
+`uvicorn app.main:app` is the API. `python -m app.worker.ingest` is the S3 ingest worker.
 
 ## Knowledge ingest
 
-**Local (development):** drop markdown, PDF, or Excel into `backend/knowledge/`. The API watches that directory, re-chunks on create/update/delete, rebuilds the TF-IDF index, and flushes the answer cache.
+**Local (development):** drop markdown, PDF, or Excel into `backend/knowledge/`. The API watches that directory, re-chunks on change, writes chunks to Vespa, and flushes the answer cache.
 
-**Production (S3):** the bucket is the only document store. The API lists objects, downloads bytes into memory, chunks them, and builds TF-IDF in RAM. It does **not** copy the corpus onto disk. `backend/knowledge/` is only for local development (`KNOWLEDGE_SOURCE=local`).
+**Production:** S3 holds original files. Vespa holds chunks and embeddings. Chat queries Vespa (hybrid BM25 + HNSW). Postgres holds users, chats, and audit only. The API does not run the S3 pipeline unless `INGEST_IN_API=true`.
 
 ```
-Author / CMS  →  S3 (original PDFs / markdown / Excel)
+Author / CMS  →  S3 (original files)
                      │
-                     ├─ list objects + version stamps every N seconds
-                     └─ optional SQS on upload/delete
-                              │
-                              ▼
-                     App process: GetObject → clean → hybrid chunk → TF-IDF → flush Redis
+                     ▼
+              ingest worker: GetObject → clean → chunk → embed → Vespa
+                     │
+                     ▼
+              API chat: embed query → Vespa hybrid search → LLM
 ```
 
 Cleaning: Unicode NFKC, strip control chars, collapse whitespace, repair PDF hyphen/line wrap, drop empty or low-signal extracts.
 
-Chunking (hybrid by file type): Markdown headings then recursive; PDF per page then recursive; Excel row groups with headers repeated; other text recursive (LangChain RecursiveCharacterTextSplitter separator order). Size 1200 / overlap 180. Semantic/LLM splitters are not used in ingest (they need an embedding call per sentence). Vector DB / Chroma is later; search is still TF-IDF.
+Chunking: size 1200 / overlap 180. With `LLM_API_KEY`, OpenAI semantic split; otherwise TF-IDF cohesion. Search ranking is 70% dense / 30% BM25 in Vespa.
 
-Use an IAM role (or AWS env credentials). Do not put access keys in git.
+Leave `AWS_ACCESS_KEY_ID` empty in production and use an IAM role. Optional `AWS_SECRETS_ARN` loads missing env keys from Secrets Manager.
 
-`POST /v1/reindex` remains a manual force rebuild for managers.
+`POST /v1/reindex` remains a manual force rebuild for managers. Schema changes go through Alembic (`alembic upgrade head` from `backend/`, or `MIGRATE_ON_BOOT=true` in development).
 
 ## Google Cloud (once)
 
@@ -51,17 +51,18 @@ Use **127.0.0.1**, not `localhost`, in both the Cloud Console and the browser.
 ## Run
 
 ```bash
-docker compose up -d postgres redis
+docker compose up -d postgres redis vespa
 cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy ..\.env.example ..\.env
-# edit ..\.env and set GOOGLE_CLIENT_ID
+# edit ..\.env: GOOGLE_CLIENT_ID, LLM_API_KEY; wait until Vespa is healthy
 uvicorn app.main:app --reload --port 8000
+# production-style ingest (separate process): python -m app.worker.ingest
 ```
 
-`GET http://127.0.0.1:8000/health` should show `"postgres": true`, `"redis": true`, `"google": true`.
+`GET http://127.0.0.1:8000/health` should show `"postgres": true`, `"redis": true`, `"google": true`, `"vespa": true`.
 
 ```bash
 cd frontend
