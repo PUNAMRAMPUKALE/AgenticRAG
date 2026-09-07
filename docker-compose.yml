@@ -28,11 +28,19 @@ services:
 
   vespa:
     image: vespaengine/vespa
-    profiles: ["vespa"]
     hostname: vespa-container
     ports:
       - "8080:8080"
       - "19071:19071"
+    volumes:
+      - agenticrag_vespa:/opt/vespa/var
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:19071/state/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
 
 volumes:
   agenticrag_pg:
+  agenticrag_vespa:

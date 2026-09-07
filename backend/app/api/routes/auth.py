@@ -30,6 +30,12 @@ async def google_login(
     container: AppContainer = Depends(get_container),
 ):
     principal = container.identity.verify_id_token(body.id_token)
+    await container.conversations.upsert_profile(
+        principal.subject,
+        principal.email or principal.username,
+        principal.username,
+        is_manager=principal.is_manager,
+    )
     sid = await container.sessions.create(principal)
     secure = container.settings.environment.lower() == "production"
     response.set_cookie(

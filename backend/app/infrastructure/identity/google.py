@@ -45,4 +45,4 @@ class GoogleIdentity:
         if not subject:
             raise AuthError(401, "Google token missing sub")
         name = str(payload.get("name") or email)
-        return Principal(subject=subject, username=name, roles=frozenset(roles))
+        return Principal(subject=subject, username=name, roles=frozenset(roles), email=email)

@@ -67,7 +67,7 @@ class HealthService:
             knowledge_source=self._settings.knowledge_source.strip().lower() or "local",
             embeddings=bool(self._settings.llm_api_key.strip()),
             ingesting=ingesting,
-            vector_store="postgres",
+            vector_store="vespa",
             files_rechunked=files_rechunked,
             files_reused=files_reused,
         )

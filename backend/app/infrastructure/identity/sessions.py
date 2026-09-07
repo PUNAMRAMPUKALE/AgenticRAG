@@ -25,6 +25,7 @@ class RedisSessionStore:
                 "sub": principal.subject,
                 "username": principal.username,
                 "roles": sorted(principal.roles),
+                "email": principal.email,
             }
         )
         await self._r.set(f"{KEY_PREFIX}:{sid}", payload, ex=self._ttl)
@@ -44,6 +45,7 @@ class RedisSessionStore:
             subject=str(data["sub"]),
             username=str(data["username"]),
             roles=frozenset(data.get("roles") or []),
+            email=str(data.get("email") or ""),
         )
 
     async def delete(self, session_id: str) -> None:

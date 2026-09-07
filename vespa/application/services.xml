@@ -10,6 +10,7 @@
   <content id="knowledge" version="1.0">
     <redundancy>1</redundancy>
     <documents>
+      <document type="knowledge_source" mode="index" />
       <document type="knowledge_chunk" mode="index" />
     </documents>
     <nodes>

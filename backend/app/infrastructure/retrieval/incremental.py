@@ -10,7 +10,6 @@ import numpy as np
 
 from app.domain.models import Chunk
 from app.infrastructure.llm.embeddings import get_embedder
-from app.infrastructure.persistence.vectors import PostgresVectorStore
 from app.infrastructure.retrieval.ingest import ingest_bytes
 from app.infrastructure.retrieval.sparse import SparseIndex
 
@@ -35,15 +34,17 @@ class IncrementalResult:
 
 
 async def sync_incremental(
-    store: PostgresVectorStore,
+    store,
     *,
     remote: dict[str, str],
     fingerprint: str,
     fetch_bytes: Callable[[str], Awaitable[bytes]],
 ) -> IncrementalResult:
-    """Chunk+embed only files whose stamp changed. Unchanged files load from Postgres."""
+    """Chunk+embed only files whose stamp changed. Unchanged files load from Vespa."""
     embedder = get_embedder()
     model = embedder.model if embedder else ""
+    if hasattr(store, "ensure_ready"):
+        await store.ensure_ready()
     stored = await store.stamps()
     stored_model = await store.stored_embedding_model()
     if stored and stored_model != model:
@@ -53,7 +54,7 @@ async def sync_incremental(
     removed = [key for key in stored if key not in remote]
     if removed:
         await store.delete_sources(removed)
-        log.info("Removed %s deleted knowledge files from Postgres", len(removed))
+        log.info("Removed %s deleted knowledge files from Vespa", len(removed))
 
     changed = [key for key, stamp in remote.items() if stored.get(key) != stamp]
     reused = len(remote) - len(changed)
@@ -82,7 +83,7 @@ async def sync_incremental(
         log.warning("Persisted embeddings missing; re-embedded %s chunks", len(chunks))
     index = SparseIndex(chunks, embedder=embedder, dense=dense)
     log.info(
-        "Knowledge index: %s chunks, %s files re-chunked, %s files reused from Postgres",
+        "Knowledge index: %s chunks, %s files re-chunked, %s files reused from Vespa",
         len(chunks),
         len(changed),
         reused,

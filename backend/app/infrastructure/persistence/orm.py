@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -13,56 +13,84 @@ class Base(DeclarativeBase):
 
 class ConversationRow(Base):
     __tablename__ = "conversations"
+    __table_args__ = (Index("ix_conversations_user_created", "user_id", "created_at"),)
 
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(255), index=True)
-    title: Mapped[str] = mapped_column(String(200))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    extra: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     messages: Mapped[list["MessageRow"]] = relationship(back_populates="conversation")
 
 
 class MessageRow(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant')", name="ck_messages_role"),
+        Index("ix_messages_session_created", "session_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("conversations.session_id"), index=True)
-    role: Mapped[str] = mapped_column(String(16))
-    content: Mapped[str] = mapped_column(Text)
-    citations: Mapped[list] = mapped_column(JSONB)
-    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("conversations.session_id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     conversation: Mapped[ConversationRow] = relationship(back_populates="messages")
 
 
-class KnowledgeSourceRow(Base):
-    """One knowledge file. etag/stamp changes ⇒ re-chunk only this file."""
+class KnowledgeIngestRunRow(Base):
+    """Operational audit of ingest. Chunk text and embeddings live in Vespa, not here."""
 
-    __tablename__ = "knowledge_sources"
-
-    source_key: Mapped[str] = mapped_column(String(512), primary_key=True)
-    etag: Mapped[str] = mapped_column(String(128))
-    embedding_model: Mapped[str] = mapped_column(String(128), default="")
-    chunks: Mapped[list["KnowledgeChunkRow"]] = relationship(
-        back_populates="source", cascade="all, delete-orphan"
+    __tablename__ = "knowledge_ingest_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed')",
+            name="ck_ingest_runs_status",
+        ),
+        CheckConstraint(
+            "knowledge_source IN ('s3', 'local')",
+            name="ck_ingest_runs_source",
+        ),
+        Index("ix_ingest_runs_started", "started_at"),
+        Index("ix_ingest_runs_status_started", "status", "started_at"),
     )
 
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    knowledge_source: Mapped[str] = mapped_column(String(16), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    index_version: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    files_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    files_rechunked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    files_reused: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    files_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chunks_indexed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-class KnowledgeChunkRow(Base):
-    """Persisted chunk text + embedding. Survives API restart."""
 
-    __tablename__ = "knowledge_chunks"
+class UserProfileRow(Base):
+    __tablename__ = "user_profiles"
 
-    chunk_id: Mapped[str] = mapped_column(String(512), primary_key=True)
-    source_key: Mapped[str] = mapped_column(
-        String(512), ForeignKey("knowledge_sources.source_key", ondelete="CASCADE"), index=True
-    )
-    file_id: Mapped[str] = mapped_column(String(512), index=True)
-    title: Mapped[str] = mapped_column(String(200))
-    text: Mapped[str] = mapped_column(Text)
-    as_of: Mapped[str] = mapped_column(String(80), default="")
-    section: Mapped[str] = mapped_column(String(200), default="")
-    page: Mapped[str] = mapped_column(String(32), default="")
-    doc_type: Mapped[str] = mapped_column(String(32), default="")
-    strategy: Mapped[str] = mapped_column(String(64), default="")
-    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float), nullable=True)
-    source: Mapped[KnowledgeSourceRow] = relationship(back_populates="chunks")
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_manager: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class QueryRequestRow(Base):
+    __tablename__ = "requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, ForeignKey("user_profiles.id"), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    user_query: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

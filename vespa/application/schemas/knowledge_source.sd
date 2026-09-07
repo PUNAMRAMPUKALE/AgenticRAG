@@ -1,0 +1,61 @@
+schema knowledge_source {
+    document knowledge_source {
+        field source_key type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field corpus_id type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field tenant_id type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field source_uri type string {
+            indexing: summary | attribute
+        }
+        field content_type type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field etag type string {
+            indexing: summary | attribute
+        }
+        field content_sha256 type string {
+            indexing: summary | attribute
+        }
+        field byte_size type long {
+            indexing: summary | attribute
+        }
+        field chunk_count type int {
+            indexing: summary | attribute
+        }
+        field embedding_model type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field embedding_dim type int {
+            indexing: summary | attribute
+        }
+        field schema_version type int {
+            indexing: summary | attribute
+        }
+        field status type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field error_detail type string {
+            indexing: summary
+        }
+        field ingest_run_id type string {
+            indexing: summary | attribute
+        }
+        field ingested_at type long {
+            indexing: summary | attribute
+        }
+        field updated_at type long {
+            indexing: summary | attribute
+        }
+    }
+}

@@ -3,7 +3,26 @@ schema knowledge_chunk {
         field chunk_id type string {
             indexing: summary | attribute
         }
+        field source_key type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field corpus_id type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field tenant_id type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field source_uri type string {
+            indexing: summary | attribute
+        }
         field file_id type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field ordinal type int {
             indexing: summary | attribute
         }
         field title type string {
@@ -14,9 +33,6 @@ schema knowledge_chunk {
             indexing: index | summary
             index: enable-bm25
         }
-        field as_of type string {
-            indexing: summary | attribute
-        }
         field section type string {
             indexing: index | summary | attribute
             index: enable-bm25
@@ -24,11 +40,62 @@ schema knowledge_chunk {
         field page type string {
             indexing: summary | attribute
         }
+        field as_of type string {
+            indexing: summary | attribute
+        }
         field doc_type type string {
             indexing: summary | attribute
+            attribute: fast-search
         }
         field strategy type string {
             indexing: summary | attribute
+        }
+        field language type string {
+            indexing: summary | attribute
+        }
+        field classification type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field char_count type int {
+            indexing: summary | attribute
+        }
+        field token_count type int {
+            indexing: summary | attribute
+        }
+        field content_sha256 type string {
+            indexing: summary | attribute
+        }
+        field embedding_model type string {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+        field embedding_dim type int {
+            indexing: summary | attribute
+        }
+        field schema_version type int {
+            indexing: summary | attribute
+        }
+        field ingest_run_id type string {
+            indexing: summary | attribute
+        }
+        field created_at type long {
+            indexing: summary | attribute
+        }
+        field updated_at type long {
+            indexing: summary | attribute
+        }
+        field embedding type tensor<float>(x[1536]) {
+            indexing: attribute | index | summary
+            attribute {
+                distance-metric: angular
+            }
+            index {
+                hnsw {
+                    max-links-per-node: 16
+                    neighbors-to-explore-at-insert: 200
+                }
+            }
         }
     }
 
@@ -39,6 +106,24 @@ schema knowledge_chunk {
     rank-profile bm25 inherits default {
         first-phase {
             expression: bm25(text) + bm25(title) + bm25(section)
+        }
+    }
+
+    rank-profile semantic inherits default {
+        inputs {
+            query(q_emb) tensor<float>(x[1536])
+        }
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    rank-profile hybrid inherits default {
+        inputs {
+            query(q_emb) tensor<float>(x[1536])
+        }
+        first-phase {
+            expression: 0.3 * (bm25(text) + bm25(title) + bm25(section)) + 0.7 * closeness(field, embedding)
         }
     }
 }

@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
 from app.domain.models import Conversation, ConversationSummary, Message
-from app.infrastructure.persistence.orm import Base, ConversationRow, MessageRow
+from app.infrastructure.persistence.orm import (
+    Base,
+    ConversationRow,
+    MessageRow,
+    QueryRequestRow,
+    UserProfileRow,
+)
+from app.infrastructure.persistence.rls import apply_rls, apply_row_context
 
 
 class PostgresConversationRepository:
@@ -21,6 +32,7 @@ class PostgresConversationRepository:
     async def init_schema(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await apply_rls(conn)
 
     async def ping(self) -> bool:
         try:
@@ -30,15 +42,60 @@ class PostgresConversationRepository:
         except Exception:
             return False
 
-    async def create(self, session_id: str, user_id: str, title: str) -> None:
+    @asynccontextmanager
+    async def _ctx(self, user_id: str, is_manager: bool, *, service: bool = False):
         async with self._sessions() as db:
-            db.add(ConversationRow(session_id=session_id, user_id=user_id, title=title[:200]))
+            await apply_row_context(db, user_id=user_id, is_manager=is_manager, service=service)
+            yield db
             await db.commit()
 
-    async def get(self, session_id: str, user_id: str) -> Conversation | None:
-        async with self._sessions() as db:
+    async def upsert_profile(self, user_id: str, email: str, full_name: str, *, is_manager: bool) -> None:
+        async with self._ctx(user_id, is_manager, service=True) as db:
+            row = await db.get(UserProfileRow, user_id)
+            if row is None:
+                db.add(
+                    UserProfileRow(
+                        id=user_id,
+                        email=email or user_id,
+                        full_name=full_name or None,
+                        is_manager=is_manager,
+                    )
+                )
+                return
+            row.email = email or row.email
+            row.full_name = full_name or row.full_name
+            row.is_manager = is_manager
+            row.updated_at = datetime.now(timezone.utc)
+
+    async def log_request(
+        self, user_id: str, user_query: str, session_id: str | None, *, is_manager: bool = False
+    ) -> None:
+        async with self._ctx(user_id, is_manager) as db:
+            db.add(
+                QueryRequestRow(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_query=user_query,
+                )
+            )
+
+    async def create(self, session_id: str, user_id: str, title: str, *, is_manager: bool = False) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._ctx(user_id, is_manager) as db:
+            db.add(
+                ConversationRow(
+                    session_id=session_id,
+                    user_id=user_id,
+                    title=title[:200],
+                    last_message_at=now,
+                )
+            )
+
+    async def get(self, session_id: str, user_id: str, *, is_manager: bool = False) -> Conversation | None:
+        async with self._ctx(user_id, is_manager) as db:
             row = await db.get(ConversationRow, session_id)
-            if not row or row.user_id != user_id:
+            if not row or (row.user_id != user_id and not is_manager):
                 return None
             result = await db.execute(
                 select(MessageRow).where(MessageRow.session_id == session_id).order_by(MessageRow.id)
@@ -59,23 +116,27 @@ class PostgresConversationRepository:
                 ],
             )
 
-    async def list_for_user(self, user_id: str) -> list[ConversationSummary]:
-        async with self._sessions() as db:
+    async def list_for_user(self, user_id: str, *, is_manager: bool = False) -> list[ConversationSummary]:
+        async with self._ctx(user_id, is_manager) as db:
             count_col = func.count(MessageRow.id)
-            result = await db.execute(
+            q = (
                 select(ConversationRow.session_id, ConversationRow.title, count_col)
                 .outerjoin(MessageRow, MessageRow.session_id == ConversationRow.session_id)
-                .where(ConversationRow.user_id == user_id)
                 .group_by(ConversationRow.session_id, ConversationRow.title, ConversationRow.created_at)
                 .order_by(ConversationRow.created_at.desc())
             )
+            if not is_manager:
+                q = q.where(ConversationRow.user_id == user_id)
+            result = await db.execute(q)
             return [
                 ConversationSummary(session_id=sid, title=title, message_count=int(n))
                 for sid, title, n in result.all()
             ]
 
-    async def add_message(self, session_id: str, message: Message) -> None:
-        async with self._sessions() as db:
+    async def add_message(
+        self, session_id: str, message: Message, *, user_id: str, is_manager: bool = False
+    ) -> None:
+        async with self._ctx(user_id, is_manager) as db:
             db.add(
                 MessageRow(
                     session_id=session_id,
@@ -85,10 +146,12 @@ class PostgresConversationRepository:
                     cache_hit=message.cache_hit,
                 )
             )
-            await db.commit()
+            conv = await db.get(ConversationRow, session_id)
+            if conv is not None:
+                conv.last_message_at = datetime.now(timezone.utc)
 
     async def count(self) -> int:
-        async with self._sessions() as db:
+        async with self._ctx("", False, service=True) as db:
             n = await db.scalar(select(func.count()).select_from(ConversationRow))
             return int(n or 0)
 

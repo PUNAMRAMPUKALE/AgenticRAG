@@ -15,3 +15,8 @@ class Principal:
     subject: str
     username: str
     roles: frozenset[str]
+    email: str = ""
+
+    @property
+    def is_manager(self) -> bool:
+        return ROLE_MANAGER in self.roles

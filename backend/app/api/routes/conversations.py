@@ -16,7 +16,9 @@ async def list_conversations(
     principal: Principal = Depends(require_any_role(*CHAT_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
-    rows = await container.conversation_queries.list_for_user(principal.subject)
+    rows = await container.conversation_queries.list_for_user(
+        principal.subject, is_manager=principal.is_manager
+    )
     return {"conversations": [asdict(r) for r in rows]}
 
 
@@ -26,7 +28,9 @@ async def get_conversation(
     principal: Principal = Depends(require_any_role(*CHAT_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
-    conv = await container.conversation_queries.get_for_user(session_id, principal.subject)
+    conv = await container.conversation_queries.get_for_user(
+        session_id, principal.subject, is_manager=principal.is_manager
+    )
     return {
         "session_id": conv.session_id,
         "title": conv.title,

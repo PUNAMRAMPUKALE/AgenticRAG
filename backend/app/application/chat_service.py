@@ -49,22 +49,29 @@ class ChatService:
             raise EmptyQuery()
 
         user_id = principal.subject
+        manager = principal.is_manager
         new_conversation = not session_id
         if new_conversation:
             session_id = str(uuid.uuid4())
-            await self._conversations.create(session_id, user_id, text[:60])
+            await self._conversations.create(session_id, user_id, text[:60], is_manager=manager)
         else:
-            existing = await self._conversations.get(session_id, user_id)
+            existing = await self._conversations.get(session_id, user_id, is_manager=manager)
             if not existing:
                 raise ConversationNotFound("Conversation not found. Start a new chat.")
+
+        await self._conversations.log_request(user_id, text, session_id, is_manager=manager)
 
         cached = await self._cache.get(user_id, session_id, index_version, text)
         if cached:
             answer, citations = cached
-            await self._conversations.add_message(session_id, Message(role="user", content=text))
+            await self._conversations.add_message(
+                session_id, Message(role="user", content=text), user_id=user_id, is_manager=manager
+            )
             await self._conversations.add_message(
                 session_id,
                 Message(role="assistant", content=answer, citations=citations, cache_hit=True),
+                user_id=user_id,
+                is_manager=manager,
             )
             return ChatResult(
                 session_id=session_id,
@@ -79,10 +86,15 @@ class ChatService:
                 used_llm=False,
             )
 
-        await self._conversations.add_message(session_id, Message(role="user", content=text))
+        await self._conversations.add_message(
+            session_id, Message(role="user", content=text), user_id=user_id, is_manager=manager
+        )
         answer, citations, used_llm = await self._generator.generate(text, index)
         await self._conversations.add_message(
-            session_id, Message(role="assistant", content=answer, citations=citations)
+            session_id,
+            Message(role="assistant", content=answer, citations=citations),
+            user_id=user_id,
+            is_manager=manager,
         )
         await self._cache.set(user_id, session_id, index_version, text, answer, citations)
         return ChatResult(

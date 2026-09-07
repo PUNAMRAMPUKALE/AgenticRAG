@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from app.domain.knowledge import chunk_record
 from app.domain.models import Chunk
 from app.domain.ports import AnswerCache, KnowledgeLoader, SearchIndex
-from app.infrastructure.persistence.vectors import PostgresVectorStore
+from app.infrastructure.llm.embeddings import get_embedder
+from app.infrastructure.persistence.ingest_runs import IngestRunRepository
 from app.infrastructure.retrieval.incremental import stamp_fingerprint, sync_incremental
+from app.infrastructure.retrieval.vespa_store import VespaChunkStore
 
 log = logging.getLogger(__name__)
 
@@ -27,13 +29,15 @@ class KnowledgeService:
         self,
         loader: KnowledgeLoader,
         cache: AnswerCache,
-        vespa: object | None = None,
-        vector_store: PostgresVectorStore | None = None,
+        vector_store: VespaChunkStore | None = None,
+        ingest_runs: IngestRunRepository | None = None,
+        knowledge_source: str = "s3",
     ):
         self._loader = loader
         self._cache = cache
-        self._vespa = vespa
         self._vector_store = vector_store
+        self._ingest_runs = ingest_runs
+        self._knowledge_source = knowledge_source
         self._lock = asyncio.Lock()
         self.chunks: list[Chunk] = []
         self.index: SearchIndex | None = None
@@ -91,8 +95,23 @@ class KnowledgeService:
         if self.last_changed_files or actor.startswith("reindex"):
             flushed = await self._cache.flush_answers()
         await self._cache.set_index_version(self.index_version)
-        if self._vespa is not None and getattr(self._vespa, "enabled", False):
-            await self._vespa.replace_all(self.chunks)
+        if self._ingest_runs is not None:
+            model = ""
+            embedder = get_embedder()
+            if embedder:
+                model = embedder.model
+            await self._ingest_runs.record(
+                actor=actor,
+                status="succeeded",
+                knowledge_source=self._knowledge_source,
+                embedding_model=model,
+                index_version=self.index_version,
+                files_seen=self.last_changed_files + self.last_reused_files,
+                files_rechunked=self.last_changed_files,
+                files_reused=self.last_reused_files,
+                files_deleted=0,
+                chunks_indexed=len(self.chunks),
+            )
         log.info(
             "Knowledge ingest: %s chunks, version %s, flushed %s cache keys (%s)",
             len(self.chunks),
