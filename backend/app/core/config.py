@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(_REPO_ROOT / ".env")
-load_dotenv()
+load_dotenv(_REPO_ROOT / ".env", override=True)
+load_dotenv(override=True)
 
 
 class Settings(BaseSettings):

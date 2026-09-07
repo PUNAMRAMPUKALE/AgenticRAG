@@ -14,7 +14,7 @@ const creds: RequestInit = { credentials: "include" };
 export async function loadAuthConfig(): Promise<AuthConfig> {
   const res = await fetch("/v1/auth/config", creds);
   if (!res.ok) {
-    throw new Error("Could not load auth config. Is the API running?");
+    throw new Error("Could not load auth config. Is uvicorn running? The UI proxies /v1 to port 8000.");
   }
   return (await res.json()) as AuthConfig;
 }
