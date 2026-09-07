@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import json
-import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agent import generate_answer
-from app.api.deps import get_runtime, get_store, require_any_role
-from app.cache import build_cache_key
-from app.core.security import ROLE_ADMIN, ROLE_ANALYST, Principal
-from app.models import Message
-from app.runtime import Runtime
-from app.store import ConversationStore
+from app.api.deps import get_container, require_any_role
+from app.application.chat_service import ChatResult
+from app.application.container import AppContainer
+from app.domain.identity import ROLE_ADMIN, ROLE_ANALYST, Principal
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -27,79 +23,43 @@ class ChatRequest(BaseModel):
 async def chat(
     body: ChatRequest,
     principal: Principal = Depends(require_any_role(ROLE_ANALYST, ROLE_ADMIN)),
-    store: ConversationStore = Depends(get_store),
-    runtime: Runtime = Depends(get_runtime),
+    container: AppContainer = Depends(get_container),
 ):
-    if runtime.index is None:
-        raise HTTPException(503, "Index not ready")
-
-    text = body.message.strip()
-    if not text:
-        raise HTTPException(400, "Empty query")
-
-    user_id = principal.subject
-    new_session = not body.session_id
-    if new_session:
-        session_id = str(uuid.uuid4())
-        await store.create(session_id, user_id, text[:60])
-    else:
-        session_id = body.session_id
-        existing = await store.get(session_id, user_id)
-        if not existing:
-            raise HTTPException(404, "Conversation not found. Start a new chat.")
-
-    cache_key = build_cache_key(user_id, session_id, runtime.index_version, text)
-    cached = await runtime.cache.get(cache_key)
+    result = await container.chat.ask(
+        principal=principal,
+        message=body.message,
+        session_id=body.session_id,
+        index=container.knowledge.index,
+        index_version=container.knowledge.index_version,
+    )
 
     async def events():
-        yield _sse(
-            {
-                "type": "session",
-                "session_id": session_id,
-                "new_conversation": new_session,
-                "user_id": user_id,
-                "username": principal.username,
-                "index_version": runtime.index_version,
-                "redis": runtime.cache.enabled,
-            }
-        )
-
-        if cached:
-            answer, citations = cached
-            await store.add_message(session_id, Message(role="user", content=text))
-            await store.add_message(
-                session_id,
-                Message(role="assistant", content=answer, citations=citations, cache_hit=True),
-            )
-            yield _sse({"type": "cache_hit", "value": True})
-            yield _sse({"type": "token", "text": answer})
-            yield _sse({"type": "citations", "citations": citations})
-            yield _sse({"type": "done", "session_id": session_id, "cache_hit": True})
-            return
-
-        yield _sse({"type": "cache_hit", "value": False})
-        await store.add_message(session_id, Message(role="user", content=text))
-        answer, citations, used_llm = await generate_answer(text, runtime.index)
-        await store.add_message(
-            session_id, Message(role="assistant", content=answer, citations=citations)
-        )
-        await runtime.cache.set(cache_key, answer, citations)
-        yield _sse({"type": "token", "text": answer})
-        yield _sse({"type": "citations", "citations": citations})
-        yield _sse(
-            {
-                "type": "done",
-                "session_id": session_id,
-                "cache_hit": False,
-                "used_llm": used_llm,
-            }
-        )
+        yield _sse(_session_event(result))
+        yield _sse({"type": "cache_hit", "value": result.cache_hit})
+        yield _sse({"type": "token", "text": result.answer})
+        yield _sse({"type": "citations", "citations": result.citations})
+        done = {"type": "done", "session_id": result.session_id, "cache_hit": result.cache_hit}
+        if not result.cache_hit:
+            done["used_llm"] = result.used_llm
+        yield _sse(done)
 
     return StreamingResponse(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _session_event(result: ChatResult) -> dict:
+    return {
+        "type": "session",
+        "session_id": result.session_id,
+        "new_conversation": result.new_conversation,
+        "user_id": result.user_id,
+        "username": result.username,
+        "index_version": result.index_version,
+        "redis": result.redis_enabled,
+    }
 
 
 def _sse(payload: dict) -> str:

@@ -1,31 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import httpx
 import jwt
 from jwt import PyJWKClient
 
-ROLE_ANALYST = "analyst"
-ROLE_ADMIN = "admin"
-APP_ROLES = frozenset({ROLE_ANALYST, ROLE_ADMIN})
+from app.core.errors import AuthError
+from app.domain.identity import APP_ROLES, Principal
 
 
-class AuthError(Exception):
-    def __init__(self, status_code: int, detail: str):
-        self.status_code = status_code
-        self.detail = detail
-        super().__init__(detail)
-
-
-@dataclass(frozen=True)
-class Principal:
-    subject: str
-    username: str
-    roles: frozenset[str]
-
-
-def extract_roles(payload: dict) -> frozenset[str]:
+def _extract_roles(payload: dict) -> frozenset[str]:
     found: set[str] = set()
     realm = payload.get("realm_access")
     if isinstance(realm, dict):
@@ -41,9 +24,7 @@ def extract_roles(payload: dict) -> frozenset[str]:
     return frozenset(r for r in found if r in APP_ROLES)
 
 
-class TokenVerifier:
-    """Validates access tokens as an OAuth2 resource server (JWKS, iss, aud, exp)."""
-
+class JwksTokenVerifier:
     def __init__(self, issuer: str, audience: str, jwks_url: str | None = None):
         self.issuer = issuer.rstrip("/")
         self.audience = audience
@@ -101,7 +82,5 @@ class TokenVerifier:
         subject = str(payload.get("sub") or "")
         if not subject:
             raise AuthError(401, "Token missing sub")
-        username = str(
-            payload.get("preferred_username") or payload.get("email") or subject
-        )
-        return Principal(subject=subject, username=username, roles=extract_roles(payload))
+        username = str(payload.get("preferred_username") or payload.get("email") or subject)
+        return Principal(subject=subject, username=username, roles=_extract_roles(payload))

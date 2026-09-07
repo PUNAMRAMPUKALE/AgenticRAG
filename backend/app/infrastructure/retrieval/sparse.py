@@ -3,12 +3,10 @@ from __future__ import annotations
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from app.models import Chunk
+from app.domain.models import Chunk
 
 
 class SparseIndex:
-    """Keyword / TF-IDF search (MVP stand-in for BM25 + later dense hybrid)."""
-
     def __init__(self, chunks: list[Chunk]):
         self.chunks = chunks
         self._vectorizer = TfidfVectorizer(stop_words="english")

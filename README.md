@@ -4,6 +4,20 @@ Postgres for conversation history. Redis for answer cache. The API is an **OAuth
 
 Local IdP is **Keycloak**. Production should point `OIDC_ISSUER` at Auth0, Cognito, or Entra (https) and keep `OIDC_AUDIENCE` as this API’s identifier.
 
+## Architecture
+
+The API is a four-layer service. HTTP never talks to Redis, Postgres, or JWKS directly.
+
+| Layer | Package | Owns |
+|---|---|---|
+| Presentation | `app.api` | Routes, auth dependencies, SSE |
+| Application | `app.application` | Use cases: chat, conversations, reindex, health |
+| Domain | `app.domain` | Entities, `Principal`, ports (interfaces) |
+| Infrastructure | `app.infrastructure` | Postgres, Redis, Keycloak JWKS, TF-IDF, Pydantic AI |
+| Cross-cutting | `app.core` | Settings, errors, request middleware |
+
+`app.main` is the composition root (`uvicorn app.main:app`). Adapters are wired in `application/container.py`.
+
 ## Run
 
 ```bash

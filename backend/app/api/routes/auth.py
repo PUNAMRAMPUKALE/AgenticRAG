@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_principal
-from app.core.security import Principal
-from app.settings import get_settings
+from app.api.deps import get_container, get_principal
+from app.application.container import AppContainer
+from app.domain.identity import Principal
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
 @router.get("/config")
-def auth_config():
-    settings = get_settings()
+def auth_config(container: AppContainer = Depends(get_container)):
+    s = container.settings
     return {
-        "issuer": settings.oidc_issuer,
-        "client_id": settings.oidc_spa_client_id,
-        "audience": settings.oidc_audience,
+        "issuer": s.oidc_issuer,
+        "client_id": s.oidc_spa_client_id,
+        "audience": s.oidc_audience,
     }
 
 
