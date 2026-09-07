@@ -50,6 +50,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [cacheBanner, setCacheBanner] = useState<string | null>(null);
   const [redisOn, setRedisOn] = useState<boolean | null>(null);
+  const [indexing, setIndexing] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const isManager = Boolean(me?.roles.includes("manager"));
@@ -88,6 +89,28 @@ export default function App() {
       cancelled = true;
     };
   }, [loadConversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function pollHealth() {
+      try {
+        const res = await fetch("/health", { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) return;
+        const data = (await res.json()) as { ingesting?: boolean; docs_indexed?: number };
+        if (!cancelled) {
+          setIndexing(Boolean(data.ingesting) || data.docs_indexed === 0);
+        }
+      } catch {
+        /* API still starting */
+      }
+    }
+    void pollHealth();
+    const id = window.setInterval(() => void pollHealth(), 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   async function onGoogle(idToken: string) {
     setAuthError(null);
@@ -164,6 +187,18 @@ export default function App() {
       setMessages((m) => [
         ...m,
         { role: "assistant", content: "You do not have permission to chat." },
+      ]);
+      setBusy(false);
+      return;
+    }
+    if (res.status === 503) {
+      const body = (await res.json().catch(() => ({}))) as { detail?: string };
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: body.detail || "Knowledge is still indexing in the background. Try again in a minute.",
+        },
       ]);
       setBusy(false);
       return;
@@ -247,6 +282,12 @@ export default function App() {
         <h1>Horizon Trust knowledge assistant</h1>
         <p>Sign in with Google. The API verifies the Google ID token and stores an httpOnly session.</p>
         {authError ? <p className="gate-error">{authError}</p> : null}
+        {indexing ? (
+          <p className="gate-hint">
+            Knowledge is indexing from S3 in the background. You can sign in now; chat answers
+            wait until indexing finishes.
+          </p>
+        ) : null}
         {clientId ? (
           <GoogleOAuthProvider clientId={clientId}>
             <GoogleLogin
@@ -296,6 +337,9 @@ export default function App() {
           </button>
         </div>
       </header>
+      {indexing ? (
+        <div className="banner">Indexing knowledge from S3 in the background. Chat will work when this finishes.</div>
+      ) : null}
       {cacheBanner ? <div className="banner">{cacheBanner}</div> : null}
       <div className="shell">
         <aside className="sidebar">
@@ -320,8 +364,7 @@ export default function App() {
           <div className="thread" ref={listRef}>
             {messages.length === 0 ? (
               <p style={{ color: "var(--muted)" }}>
-                Ask about the Northstar knowledge corpus. Drop or edit files under backend/knowledge
-                and they are chunked automatically. Managers can still force Reindex.
+                Ask about the Northstar knowledge corpus. S3 files are chunked in the background.
               </p>
             ) : null}
             {messages.map((m, i) => (

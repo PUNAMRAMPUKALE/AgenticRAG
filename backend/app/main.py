@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     if container.ingest_watcher is not None:
         container.ingest_watcher.start(asyncio.get_running_loop())
     if container.s3_pipeline is not None:
-        await container.s3_pipeline.sync_now()
+        # Do not block login on first S3 ingest. Auth starts immediately; chunks fill in later.
         container.s3_pipeline.start(asyncio.get_running_loop())
     yield
     await container.aclose()

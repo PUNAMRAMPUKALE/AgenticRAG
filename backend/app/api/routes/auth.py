@@ -16,7 +16,7 @@ class GoogleLoginRequest(BaseModel):
 
 
 @router.get("/config")
-def auth_config(container: AppContainer = Depends(get_container)):
+async def auth_config(container: AppContainer = Depends(get_container)):
     return {
         "provider": "google",
         "client_id": container.settings.google_client_id,

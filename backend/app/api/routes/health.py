@@ -16,5 +16,8 @@ async def health(request: Request):
     status = await container.health.status(
         docs_indexed=len(container.knowledge.chunks),
         index_version=container.knowledge.index_version,
+        ingesting=container.knowledge.ingesting or container.knowledge.index is None,
+        files_rechunked=container.knowledge.last_changed_files,
+        files_reused=container.knowledge.last_reused_files,
     )
     return asdict(status)

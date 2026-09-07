@@ -9,7 +9,12 @@ from app.infrastructure.llm.embeddings import OpenAIEmbeddings, get_embedder
 
 
 class SparseIndex:
-    def __init__(self, chunks: list[Chunk], embedder: OpenAIEmbeddings | None = None):
+    def __init__(
+        self,
+        chunks: list[Chunk],
+        embedder: OpenAIEmbeddings | None = None,
+        dense: np.ndarray | None = None,
+    ):
         self.chunks = chunks
         self._embedder = embedder
         self._vectorizer = TfidfVectorizer(stop_words="english")
@@ -17,7 +22,12 @@ class SparseIndex:
         self._dense: np.ndarray | None = None
         if chunks:
             self._matrix = self._vectorizer.fit_transform(c.text for c in chunks)
-            if embedder is not None:
+            if dense is not None and dense.size and dense.shape[0] == len(chunks):
+                matrix = np.asarray(dense, dtype=np.float32)
+                norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+                norms = np.maximum(norms, 1e-12)
+                self._dense = matrix / norms
+            elif embedder is not None:
                 self._dense = embedder.embed([c.text for c in chunks])
 
     def search(self, query: str, k: int = 4) -> list[tuple[Chunk, float]]:

@@ -27,8 +27,9 @@ class KnowledgeS3Pipeline:
         self._task: asyncio.Task | None = None
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._knowledge.ingesting = True
         self._task = loop.create_task(self._run(), name="knowledge-s3-ingest")
-        log.info("S3 knowledge pipeline started (poll %.0fs, queue=%s)", self._poll, bool(self._queue_url))
+        log.info("S3 knowledge ingest running in the background (poll %.0fs)", self._poll)
 
     def stop(self) -> None:
         if self._task is not None:

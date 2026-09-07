@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from app.infrastructure.retrieval.ingest import ingest_bytes
+from app.infrastructure.retrieval.incremental import stamp_fingerprint
 from app.infrastructure.retrieval.sparse import build_index
 
 log = logging.getLogger(__name__)
@@ -45,7 +46,21 @@ class CorpusKnowledgeLoader:
         return self._dir
 
     def fingerprint(self) -> str:
-        return compute_index_version(self._dir)
+        return stamp_fingerprint(self.list_stamps())
+
+    def list_stamps(self) -> dict[str, str]:
+        stamps: dict[str, str] = {}
+        for path in iter_source_files(self._dir):
+            rel = path.relative_to(self._dir).as_posix()
+            st = path.stat()
+            stamps[rel] = f"{st.st_mtime_ns}:{st.st_size}"
+        return stamps
+
+    def read_bytes(self, source_key: str) -> bytes:
+        path = (self._dir / source_key).resolve()
+        if not str(path).startswith(str(self._dir.resolve())):
+            raise ValueError("Invalid knowledge path")
+        return path.read_bytes()
 
     def load(self):
         chunks = []

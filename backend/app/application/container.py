@@ -14,6 +14,7 @@ from app.infrastructure.identity.google import GoogleIdentity
 from app.infrastructure.identity.sessions import RedisSessionStore
 from app.infrastructure.llm.assistant import KnowledgeAssistant
 from app.infrastructure.persistence.conversations import PostgresConversationRepository
+from app.infrastructure.persistence.vectors import PostgresVectorStore
 from app.infrastructure.retrieval.corpus import CorpusKnowledgeLoader
 from app.infrastructure.retrieval.s3_loader import S3CorpusLoader
 from app.infrastructure.retrieval.s3_sync import KnowledgeS3Pipeline
@@ -77,11 +78,10 @@ async def build_container(settings: Settings) -> AppContainer:
         disk_loader = CorpusKnowledgeLoader()
         loader = disk_loader
     vespa = VespaChunkStore(settings.vespa_url.strip())
-    knowledge = KnowledgeService(loader, cache, vespa=vespa)
-    knowledge.load()
-    await cache.set_index_version(knowledge.index_version)
-    if vespa.enabled:
-        await vespa.replace_all(knowledge.chunks)
+    vector_store = PostgresVectorStore(conversations.engine)
+    knowledge = KnowledgeService(loader, cache, vespa=vespa, vector_store=vector_store)
+    if source != "s3":
+        await knowledge.reindex("startup-local")
 
     identity = GoogleIdentity(settings)
     sessions = RedisSessionStore(redis_client, ttl_seconds=settings.session_hours * 3600)

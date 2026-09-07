@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from app.domain.knowledge import chunk_record
 from app.domain.models import Chunk
 from app.domain.ports import AnswerCache, KnowledgeLoader, SearchIndex
+from app.infrastructure.persistence.vectors import PostgresVectorStore
+from app.infrastructure.retrieval.incremental import stamp_fingerprint, sync_incremental
 
 log = logging.getLogger(__name__)
 
@@ -21,32 +23,73 @@ class ReindexResult:
 
 
 class KnowledgeService:
-    def __init__(self, loader: KnowledgeLoader, cache: AnswerCache, vespa: object | None = None):
+    def __init__(
+        self,
+        loader: KnowledgeLoader,
+        cache: AnswerCache,
+        vespa: object | None = None,
+        vector_store: PostgresVectorStore | None = None,
+    ):
         self._loader = loader
         self._cache = cache
         self._vespa = vespa
+        self._vector_store = vector_store
         self._lock = asyncio.Lock()
         self.chunks: list[Chunk] = []
         self.index: SearchIndex | None = None
         self.index_version: str = ""
+        self.ingesting: bool = False
+        self.last_changed_files: int = 0
+        self.last_reused_files: int = 0
 
     def load(self) -> None:
         self.chunks, self.index, self.index_version = self._loader.load()
 
     async def reindex(self, actor: str) -> ReindexResult:
         async with self._lock:
-            return await self._rebuild(actor)
+            self.ingesting = True
+            try:
+                return await self._rebuild(actor)
+            finally:
+                self.ingesting = False
 
     async def reindex_if_changed(self, actor: str) -> ReindexResult | None:
         async with self._lock:
-            version = await asyncio.to_thread(self._loader.fingerprint)
-            if version == self.index_version:
-                return None
-            return await self._rebuild(actor)
+            self.ingesting = True
+            try:
+                version = await asyncio.to_thread(self._loader.fingerprint)
+                if version == self.index_version and self.index is not None:
+                    return None
+                return await self._rebuild(actor)
+            finally:
+                self.ingesting = False
 
     async def _rebuild(self, actor: str) -> ReindexResult:
-        self.chunks, self.index, self.index_version = await asyncio.to_thread(self._loader.load)
-        flushed = await self._cache.flush_answers()
+        if self._vector_store is not None and hasattr(self._loader, "list_stamps"):
+            remote = await asyncio.to_thread(self._loader.list_stamps)
+            fingerprint = stamp_fingerprint(remote)
+
+            async def fetch_bytes(source_key: str) -> bytes:
+                return await asyncio.to_thread(self._loader.read_bytes, source_key)
+
+            result = await sync_incremental(
+                self._vector_store,
+                remote=remote,
+                fingerprint=fingerprint,
+                fetch_bytes=fetch_bytes,
+            )
+            self.chunks = result.chunks
+            self.index = result.index
+            self.index_version = result.version
+            self.last_changed_files = result.changed_files
+            self.last_reused_files = result.reused_files
+        else:
+            self.chunks, self.index, self.index_version = await asyncio.to_thread(self._loader.load)
+            self.last_changed_files = 0
+            self.last_reused_files = 0
+        flushed = 0
+        if self.last_changed_files or actor.startswith("reindex"):
+            flushed = await self._cache.flush_answers()
         await self._cache.set_index_version(self.index_version)
         if self._vespa is not None and getattr(self._vespa, "enabled", False):
             await self._vespa.replace_all(self.chunks)

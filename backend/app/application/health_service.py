@@ -21,6 +21,10 @@ class HealthStatus:
     ingest_watch: bool
     knowledge_source: str
     embeddings: bool
+    ingesting: bool
+    vector_store: str
+    files_rechunked: int
+    files_reused: int
 
 
 class HealthService:
@@ -36,7 +40,14 @@ class HealthService:
         self._cache = cache
         self._identity = identity
 
-    async def status(self, docs_indexed: int, index_version: str) -> HealthStatus:
+    async def status(
+        self,
+        docs_indexed: int,
+        index_version: str,
+        ingesting: bool = False,
+        files_rechunked: int = 0,
+        files_reused: int = 0,
+    ) -> HealthStatus:
         pg_ok = await self._conversations.ping()
         google_ok = self._identity.ready
         redis_ok = self._cache.enabled
@@ -55,4 +66,8 @@ class HealthService:
             or self._settings.knowledge_source.strip().lower() == "s3",
             knowledge_source=self._settings.knowledge_source.strip().lower() or "local",
             embeddings=bool(self._settings.llm_api_key.strip()),
+            ingesting=ingesting,
+            vector_store="postgres",
+            files_rechunked=files_rechunked,
+            files_reused=files_reused,
         )

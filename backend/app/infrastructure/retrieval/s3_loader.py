@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from pathlib import Path
 
 from app.domain.models import Chunk
 from app.infrastructure.retrieval.corpus import SUPPORTED_SUFFIXES
 from app.infrastructure.retrieval.ingest import ingest_bytes
-from app.infrastructure.retrieval.sparse import build_index
+from app.infrastructure.retrieval.incremental import stamp_fingerprint
+from app.infrastructure.retrieval.sparse import SparseIndex, build_index
 
 log = logging.getLogger(__name__)
 
@@ -72,11 +72,14 @@ class S3CorpusLoader:
         return remote
 
     def fingerprint(self) -> str:
-        h = hashlib.sha256()
-        for rel, etag in sorted(self.list_etags().items()):
-            h.update(rel.encode())
-            h.update(etag.encode())
-        return h.hexdigest()[:16]
+        return stamp_fingerprint(self.list_etags())
+
+    def list_stamps(self) -> dict[str, str]:
+        return self.list_etags()
+
+    def read_bytes(self, source_key: str) -> bytes:
+        client = self._client()
+        return client.get_object(Bucket=self._bucket, Key=self._object_key(source_key))["Body"].read()
 
     def load(self) -> tuple[list[Chunk], SparseIndex, str]:
         client = self._client()

@@ -19,7 +19,10 @@ class ConversationNotFound(AppError):
 
 class IndexNotReady(AppError):
     def __init__(self):
-        super().__init__(503, "Index not ready")
+        super().__init__(
+            503,
+            "Knowledge is still indexing in the background. Sign-in works; try chat again in a minute.",
+        )
 
 
 class EmptyQuery(AppError):
