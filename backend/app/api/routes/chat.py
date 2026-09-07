@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_container, require_any_role
 from app.application.chat_service import ChatResult
 from app.application.container import AppContainer
-from app.domain.identity import ROLE_ADMIN, ROLE_ANALYST, Principal
+from app.domain.identity import CHAT_ROLES, Principal
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -22,7 +22,7 @@ class ChatRequest(BaseModel):
 @router.post("/chat")
 async def chat(
     body: ChatRequest,
-    principal: Principal = Depends(require_any_role(ROLE_ANALYST, ROLE_ADMIN)),
+    principal: Principal = Depends(require_any_role(*CHAT_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
     result = await container.chat.ask(

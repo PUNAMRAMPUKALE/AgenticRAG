@@ -5,7 +5,7 @@ from google.oauth2 import id_token
 
 from app.core.config import Settings
 from app.core.errors import AuthError
-from app.domain.identity import ROLE_ADMIN, ROLE_ANALYST, Principal
+from app.domain.identity import Principal
 
 
 class GoogleIdentity:
@@ -40,9 +40,7 @@ class GoogleIdentity:
         domain = self._settings.google_allowed_domain.strip().lower()
         if domain and not email.endswith(f"@{domain}"):
             raise AuthError(403, f"Sign-in is limited to @{domain} accounts")
-        roles = {ROLE_ANALYST}
-        if email in self._settings.admin_emails():
-            roles.add(ROLE_ADMIN)
+        roles = self._settings.roles_for_email(email)
         subject = str(payload.get("sub") or "")
         if not subject:
             raise AuthError(401, "Google token missing sub")

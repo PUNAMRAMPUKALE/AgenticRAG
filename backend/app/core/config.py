@@ -6,6 +6,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.identity import ROLE_ANALYST, ROLE_MANAGER, ROLE_SENIOR_ANALYST
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(_REPO_ROOT / ".env", override=True)
 load_dotenv(override=True)
@@ -19,7 +21,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/0"
     cache_ttl_seconds: int = 900
     google_client_id: str = ""
-    google_admin_emails: str = ""
+    google_analyst_emails: str = ""
+    google_senior_analyst_emails: str = ""
+    google_manager_emails: str = ""
     google_allowed_domain: str = ""
     session_hours: int = 12
     cors_origins: str = (
@@ -31,8 +35,16 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
-    def admin_emails(self) -> set[str]:
-        return {e.strip().lower() for e in self.google_admin_emails.split(",") if e.strip()}
+    def _email_set(self, raw: str) -> set[str]:
+        return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+    def roles_for_email(self, email: str) -> frozenset[str]:
+        addr = email.strip().lower()
+        if addr in self._email_set(self.google_manager_emails):
+            return frozenset({ROLE_MANAGER})
+        if addr in self._email_set(self.google_senior_analyst_emails):
+            return frozenset({ROLE_SENIOR_ANALYST})
+        return frozenset({ROLE_ANALYST})
 
     def require_production_guards(self) -> None:
         if self.environment.lower() != "production":

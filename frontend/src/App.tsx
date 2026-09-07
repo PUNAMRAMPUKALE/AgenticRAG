@@ -29,6 +29,13 @@ const HINTS = [
   "What is the liquidity gate limit?",
 ];
 
+function roleLabel(role: string): string {
+  if (role === "manager") return "manager (expert)";
+  if (role === "senior_analyst") return "senior analyst";
+  if (role === "analyst") return "analyst";
+  return role;
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [clientId, setClientId] = useState("");
@@ -43,7 +50,7 @@ export default function App() {
   const [redisOn, setRedisOn] = useState<boolean | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const isAdmin = Boolean(me?.roles.includes("admin"));
+  const isManager = Boolean(me?.roles.includes("manager"));
 
   const loadConversations = useCallback(async () => {
     const res = await apiFetch("/v1/conversations");
@@ -111,7 +118,7 @@ export default function App() {
   async function reindex() {
     const res = await apiFetch("/v1/reindex", { method: "POST" });
     if (res.status === 403) {
-      setCacheBanner("Reindex requires the admin role (GOOGLE_ADMIN_EMAILS).");
+      setCacheBanner("Reindex requires the manager (expert) role.");
       return;
     }
     if (!res.ok) {
@@ -272,9 +279,9 @@ export default function App() {
         <div className="auth">
           <span className="who">
             {me.username}
-            <small>{me.roles.join(", ") || "no app roles"}</small>
+            <small>{me.roles.map(roleLabel).join(", ") || "no app roles"}</small>
           </span>
-          {isAdmin ? (
+          {isManager ? (
             <button className="ghost" type="button" onClick={() => void reindex()}>
               Reindex
             </button>
@@ -311,8 +318,8 @@ export default function App() {
           <div className="thread" ref={listRef}>
             {messages.length === 0 ? (
               <p style={{ color: "var(--muted)" }}>
-                Ask a fund-doc question. Repeat it in this chat for a Redis hit. Put your Google email
-                in GOOGLE_ADMIN_EMAILS to reindex.
+                Ask a fund-doc question. Repeat it in this chat for a Redis hit. Managers (experts)
+                listed in GOOGLE_MANAGER_EMAILS can reindex.
               </p>
             ) : null}
             {messages.map((m, i) => (

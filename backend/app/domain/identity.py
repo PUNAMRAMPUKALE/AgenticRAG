@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 ROLE_ANALYST = "analyst"
-ROLE_ADMIN = "admin"
-APP_ROLES = frozenset({ROLE_ANALYST, ROLE_ADMIN})
+ROLE_SENIOR_ANALYST = "senior_analyst"
+ROLE_MANAGER = "manager"
+APP_ROLES = frozenset({ROLE_ANALYST, ROLE_SENIOR_ANALYST, ROLE_MANAGER})
+CHAT_ROLES = APP_ROLES
+REINDEX_ROLES = frozenset({ROLE_MANAGER})
 
 
 @dataclass(frozen=True)

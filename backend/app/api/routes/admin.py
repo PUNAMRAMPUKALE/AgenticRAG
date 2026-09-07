@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_container, require_any_role
 from app.application.container import AppContainer
-from app.domain.identity import ROLE_ADMIN, Principal
+from app.domain.identity import REINDEX_ROLES, Principal
 
 router = APIRouter(prefix="/v1", tags=["admin"])
 
 
 @router.post("/reindex")
 async def reindex(
-    principal: Principal = Depends(require_any_role(ROLE_ADMIN)),
+    principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
     result = await container.knowledge.reindex(principal.username)

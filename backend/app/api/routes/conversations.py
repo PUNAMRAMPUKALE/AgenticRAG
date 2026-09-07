@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_container, require_any_role
 from app.application.container import AppContainer
-from app.domain.identity import ROLE_ADMIN, ROLE_ANALYST, Principal
+from app.domain.identity import CHAT_ROLES, Principal
 
 router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
 
 
 @router.get("")
 async def list_conversations(
-    principal: Principal = Depends(require_any_role(ROLE_ANALYST, ROLE_ADMIN)),
+    principal: Principal = Depends(require_any_role(*CHAT_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
     rows = await container.conversation_queries.list_for_user(principal.subject)
@@ -23,7 +23,7 @@ async def list_conversations(
 @router.get("/{session_id}")
 async def get_conversation(
     session_id: str,
-    principal: Principal = Depends(require_any_role(ROLE_ANALYST, ROLE_ADMIN)),
+    principal: Principal = Depends(require_any_role(*CHAT_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
     conv = await container.conversation_queries.get_for_user(session_id, principal.subject)
