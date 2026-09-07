@@ -35,6 +35,8 @@ class Settings(BaseSettings):
         return {e.strip().lower() for e in self.google_admin_emails.split(",") if e.strip()}
 
     def require_production_guards(self) -> None:
+        if self.environment.lower() != "production":
+            return
         if not self.google_client_id.strip():
             raise RuntimeError(
                 "GOOGLE_CLIENT_ID is required. Create an OAuth 2.0 Web client in Google Cloud Console."
