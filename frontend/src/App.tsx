@@ -1,12 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { UserManager } from "oidc-client-ts";
-import {
-  completeSignInIfNeeded,
-  createUserManager,
-  fetchMe,
-  loadAuthConfig,
-  type Me,
-} from "./auth";
+import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
+import { apiFetch, fetchMe, loadAuthConfig, signInWithGoogleIdToken, signOut as apiSignOut, type Me } from "./auth";
 
 type Citation = {
   file_id: string;
@@ -35,22 +29,9 @@ const HINTS = [
   "What is the liquidity gate limit?",
 ];
 
-async function accessToken(mgr: UserManager): Promise<string | null> {
-  let user = await mgr.getUser();
-  if (!user) return null;
-  if (user.expired) {
-    try {
-      user = await mgr.signinSilent();
-    } catch {
-      return null;
-    }
-  }
-  return user?.access_token ?? null;
-}
-
 export default function App() {
-  const mgrRef = useRef<UserManager | null>(null);
   const [ready, setReady] = useState(false);
+  const [clientId, setClientId] = useState("");
   const [me, setMe] = useState<Me | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -65,17 +46,11 @@ export default function App() {
   const isAdmin = Boolean(me?.roles.includes("admin"));
 
   const loadConversations = useCallback(async () => {
-    const mgr = mgrRef.current;
-    if (!mgr) return;
-    const token = await accessToken(mgr);
-    if (!token) {
+    const res = await apiFetch("/v1/conversations");
+    if (!res.ok) {
       setConversations([]);
       return;
     }
-    const res = await fetch("/v1/conversations", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return;
     const data = (await res.json()) as { conversations: ConvoSummary[] };
     setConversations(data.conversations);
   }, []);
@@ -85,19 +60,15 @@ export default function App() {
     void (async () => {
       try {
         const cfg = await loadAuthConfig();
-        const mgr = createUserManager(cfg);
-        mgrRef.current = mgr;
-        const user = await completeSignInIfNeeded(mgr);
         if (cancelled) return;
-        if (user?.access_token) {
-          const profile = await fetchMe(user.access_token);
-          if (cancelled) return;
-          setMe(profile);
-          await loadConversations();
-        }
+        setClientId(cfg.client_id);
+        const profile = await fetchMe();
+        if (cancelled) return;
+        setMe(profile);
+        if (profile) await loadConversations();
       } catch (err) {
         if (!cancelled) {
-          setAuthError(err instanceof Error ? err.message : "Sign-in failed");
+          setAuthError(err instanceof Error ? err.message : "Could not reach the API");
           setMe(null);
         }
       } finally {
@@ -109,26 +80,27 @@ export default function App() {
     };
   }, [loadConversations]);
 
-  async function signIn() {
-    const mgr = mgrRef.current;
-    if (!mgr) return;
-    await mgr.signinRedirect();
+  async function onGoogle(idToken: string) {
+    setAuthError(null);
+    try {
+      const profile = await signInWithGoogleIdToken(idToken);
+      setMe(profile);
+      await loadConversations();
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Google sign-in failed");
+    }
   }
 
   async function signOut() {
-    const mgr = mgrRef.current;
-    if (!mgr) return;
-    await mgr.signoutRedirect();
+    await apiSignOut();
+    setMe(null);
+    setConversations([]);
+    setSessionId(null);
+    setMessages([]);
   }
 
   async function openConversation(id: string) {
-    const mgr = mgrRef.current;
-    if (!mgr) return;
-    const token = await accessToken(mgr);
-    if (!token) return;
-    const res = await fetch(`/v1/conversations/${id}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await apiFetch(`/v1/conversations/${id}`);
     if (!res.ok) return;
     const data = (await res.json()) as { session_id: string; messages: ChatMessage[] };
     setSessionId(data.session_id);
@@ -137,16 +109,9 @@ export default function App() {
   }
 
   async function reindex() {
-    const mgr = mgrRef.current;
-    if (!mgr) return;
-    const token = await accessToken(mgr);
-    if (!token) return;
-    const res = await fetch("/v1/reindex", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await apiFetch("/v1/reindex", { method: "POST" });
     if (res.status === 403) {
-      setCacheBanner("Reindex requires the admin role.");
+      setCacheBanner("Reindex requires the admin role (GOOGLE_ADMIN_EMAILS).");
       return;
     }
     if (!res.ok) {
@@ -159,13 +124,7 @@ export default function App() {
 
   async function send(text: string) {
     const q = text.trim();
-    const mgr = mgrRef.current;
-    if (!q || busy || !mgr) return;
-    const token = await accessToken(mgr);
-    if (!token) {
-      setMessages((m) => [...m, { role: "assistant", content: "Session expired. Sign in again." }]);
-      return;
-    }
+    if (!q || busy) return;
     setBusy(true);
     setCacheBanner(null);
     setMessages((m) => [...m, { role: "user", content: q }]);
@@ -173,12 +132,9 @@ export default function App() {
 
     let res: Response;
     try {
-      res = await fetch("/v1/chat", {
+      res = await apiFetch("/v1/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: q, session_id: sessionId }),
       });
     } catch {
@@ -190,14 +146,15 @@ export default function App() {
       return;
     }
     if (res.status === 401) {
-      setMessages((m) => [...m, { role: "assistant", content: "Token expired or invalid. Sign in again." }]);
+      setMe(null);
+      setMessages((m) => [...m, { role: "assistant", content: "Session expired. Sign in with Google again." }]);
       setBusy(false);
       return;
     }
     if (res.status === 403) {
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: "You do not have the analyst role required to chat." },
+        { role: "assistant", content: "You do not have permission to chat." },
       ]);
       setBusy(false);
       return;
@@ -279,14 +236,24 @@ export default function App() {
     return (
       <div className="gate">
         <h1>Horizon Trust knowledge assistant</h1>
-        <p>Sign in with the identity provider (Authorization Code + PKCE). Tokens are validated by the API via JWKS.</p>
+        <p>Sign in with Google. The API verifies the Google ID token and stores an httpOnly session.</p>
         {authError ? <p className="gate-error">{authError}</p> : null}
-        <button className="primary" type="button" onClick={() => void signIn()}>
-          Sign in
-        </button>
-        <p className="gate-hint">
-          Local Keycloak: analyst / analyst-pass · analyst2 / analyst-pass · admin / admin-pass
-        </p>
+        {clientId ? (
+          <GoogleOAuthProvider clientId={clientId}>
+            <GoogleLogin
+              onSuccess={(cred) => {
+                if (cred.credential) void onGoogle(cred.credential);
+              }}
+              onError={() => setAuthError("Google sign-in was cancelled or failed")}
+              useOneTap={false}
+            />
+          </GoogleOAuthProvider>
+        ) : (
+          <p className="gate-hint">
+            Set GOOGLE_CLIENT_ID in .env (Google Cloud Console → OAuth 2.0 Web client) and restart
+            uvicorn.
+          </p>
+        )}
       </div>
     );
   }
@@ -297,7 +264,7 @@ export default function App() {
         <div>
           <h1>Horizon Trust knowledge assistant</h1>
           <p>
-            OIDC access token · conversations keyed by subject
+            Signed in with Google
             {sessionId ? ` · Session ${sessionId.slice(0, 8)}…` : " · New conversation"}
             {redisOn === null ? "" : redisOn ? " · Redis on" : " · Redis off"}
           </p>
@@ -344,8 +311,8 @@ export default function App() {
           <div className="thread" ref={listRef}>
             {messages.length === 0 ? (
               <p style={{ color: "var(--muted)" }}>
-                Ask a fund-doc question. Repeat it in this chat for a Redis hit. Sign in as analyst2 to
-                confirm isolation. Only admin can reindex.
+                Ask a fund-doc question. Repeat it in this chat for a Redis hit. Put your Google email
+                in GOOGLE_ADMIN_EMAILS to reindex.
               </p>
             ) : null}
             {messages.map((m, i) => (

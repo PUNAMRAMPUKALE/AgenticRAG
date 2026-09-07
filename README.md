@@ -1,74 +1,75 @@
 # Agentic RAG
 
-Postgres for conversation history. Redis for answer cache. The API is an **OAuth2 resource server**: it never mints passwords or JWTs. The SPA signs in with **Authorization Code + PKCE** against an identity provider. Access tokens are checked with **JWKS** (`iss`, `aud`, `exp`, signature). Realm roles **analyst** and **admin** gate chat vs reindex.
-
-Local IdP is **Keycloak**. Production should point `OIDC_ISSUER` at Auth0, Cognito, or Entra (https) and keep `OIDC_AUDIENCE` as this API’s identifier.
+Postgres for conversation history. Redis for answer cache and login sessions. **Sign in with Google**: the UI gets a Google ID token, the API verifies it with Google’s certs, then sets an **httpOnly** session cookie. Chat requires a signed-in Google user (`analyst`). Reindex is limited to emails in `GOOGLE_ADMIN_EMAILS`.
 
 ## Architecture
 
-The API is a four-layer service. HTTP never talks to Redis, Postgres, or JWKS directly.
-
 | Layer | Package | Owns |
 |---|---|---|
-| Presentation | `app.api` | Routes, auth dependencies, SSE |
-| Application | `app.application` | Use cases: chat, conversations, reindex, health |
-| Domain | `app.domain` | Entities, `Principal`, ports (interfaces) |
-| Infrastructure | `app.infrastructure` | Postgres, Redis, Keycloak JWKS, TF-IDF, Pydantic AI |
+| Presentation | `app.api` | Routes, session cookie, SSE |
+| Application | `app.application` | Chat, conversations, reindex, health |
+| Domain | `app.domain` | Entities, `Principal`, ports |
+| Infrastructure | `app.infrastructure` | Postgres, Redis, Google ID tokens, TF-IDF, Pydantic AI |
 | Cross-cutting | `app.core` | Settings, errors, request middleware |
 
-`app.main` is the composition root (`uvicorn app.main:app`). Adapters are wired in `application/container.py`.
+`uvicorn app.main:app` is the composition root.
+
+## Google Cloud (once)
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → Create credentials → **OAuth client ID** → **Web application**.
+2. Authorized JavaScript origins: `http://127.0.0.1:5173` (and `http://127.0.0.1:5174` if Vite uses that port).
+3. Authorized redirect URIs: `http://127.0.0.1:5173` and `http://127.0.0.1:5174`.
+4. Copy the client ID into repo-root `.env` as `GOOGLE_CLIENT_ID`.
+5. Put your Gmail in `GOOGLE_ADMIN_EMAILS` if you need Reindex.
+
+Use **127.0.0.1**, not `localhost`, in both the Cloud Console and the browser.
 
 ## Run
 
 ```bash
-docker compose up -d postgres redis keycloak
+docker compose up -d postgres redis
 cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy ..\.env.example ..\.env
+# edit ..\.env and set GOOGLE_CLIENT_ID
 uvicorn app.main:app --reload --port 8000
 ```
 
-Wait until Keycloak answers `http://127.0.0.1:8080/realms/agenticrag` (first start can take ~30s). Health: `GET http://127.0.0.1:8000/health` should show `"postgres": true`, `"redis": true`, `"oidc": true`.
+`GET http://127.0.0.1:8000/health` should show `"postgres": true`, `"redis": true`, `"google": true`.
 
 ```bash
 cd frontend
-copy .env.example .env
 npm install
 npm run dev
 ```
 
-Open the Vite URL (use **127.0.0.1**, not localhost, so the token `iss` matches `OIDC_ISSUER`).
-
-| User | Password | Roles |
-|---|---|---|
-| analyst | analyst-pass | analyst |
-| analyst2 | analyst-pass | analyst (isolation) |
-| admin | admin-pass | analyst + admin |
+Open **http://127.0.0.1:5173** → **Sign in with Google**.
 
 ## Authorization
 
 | Route | Who |
 |---|---|
 | `GET /health`, `GET /v1/auth/config` | Public |
-| `GET /v1/auth/me`, `POST /v1/chat`, `GET /v1/conversations` | Bearer token + **analyst** or **admin** |
-| `POST /v1/reindex` | Bearer token + **admin** |
+| `POST /v1/auth/google` | Google ID token |
+| Chat and conversations | Signed-in Google user |
+| `POST /v1/reindex` | Email listed in `GOOGLE_ADMIN_EMAILS` |
 
-Conversations are stored under the token `sub`, not the display name.
+Conversations are stored under Google `sub`.
 
 ## Production
 
 ```
 ENVIRONMENT=production
-OIDC_ISSUER=https://your-idp.example.com/realms/your-realm
-OIDC_AUDIENCE=your-api-audience
-OIDC_SPA_CLIENT_ID=your-spa-client
+GOOGLE_CLIENT_ID=....apps.googleusercontent.com
+GOOGLE_ADMIN_EMAILS=you@yourcompany.com
+GOOGLE_ALLOWED_DOMAIN=yourcompany.com
 DATABASE_URL=postgresql+asyncpg://...
 REDIS_URL=redis://...
 ```
 
-The API refuses to start in production if the issuer is not https. Configure the SPA client with PKCE, no implicit flow, no resource-owner password grant. Map an audience claim to `OIDC_AUDIENCE` and include realm roles in the access token.
+Add your production HTTPS origin to the Google OAuth client. Serve UI and API on the same site so the session cookie is first-party.
 
 ## What is still later
 
