@@ -15,8 +15,8 @@ from app.core.errors import AppError
 from app.core.middleware import RequestContextMiddleware
 
 _root = Path(__file__).resolve().parents[2]
-load_dotenv(_root / ".env")
-load_dotenv()
+load_dotenv(_root / ".env", override=True)
+load_dotenv(override=True)
 
 
 @asynccontextmanager
