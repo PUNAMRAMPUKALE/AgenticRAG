@@ -5,10 +5,10 @@ from collections.abc import Callable
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.api.cookies import SESSION_COOKIE
 from app.application.container import AppContainer
 from app.core.errors import AuthError
 from app.domain.identity import Principal
-from app.domain.ports import TokenVerifier
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -20,23 +20,24 @@ def get_container(request: Request) -> AppContainer:
     return container
 
 
-def get_verifier(container: AppContainer = Depends(get_container)) -> TokenVerifier:
-    return container.verifier
-
-
-def get_principal(
+async def get_principal(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    verifier: TokenVerifier = Depends(get_verifier),
+    container: AppContainer = Depends(get_container),
 ) -> Principal:
-    header = f"Bearer {creds.credentials}" if creds else None
     try:
-        return verifier.verify(header)
+        if creds:
+            return container.identity.verify_id_token(creds.credentials)
+        principal = await container.sessions.get(request.cookies.get(SESSION_COOKIE) or "")
+        if principal is None:
+            raise AuthError(401, "Not signed in. Use Sign in with Google.")
+        return principal
     except AuthError as exc:
         raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 def require_any_role(*roles: str) -> Callable[..., Principal]:
-    def _dep(principal: Principal = Depends(get_principal)) -> Principal:
+    async def _dep(principal: Principal = Depends(get_principal)) -> Principal:
         if principal.roles.isdisjoint(roles):
             raise HTTPException(403, f"Insufficient role. Requires one of: {', '.join(roles)}")
         return principal

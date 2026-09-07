@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,10 +18,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://agenticrag:agenticrag@127.0.0.1:5432/agenticrag"
     redis_url: str = "redis://127.0.0.1:6379/0"
     cache_ttl_seconds: int = 900
-    oidc_issuer: str = "http://127.0.0.1:8080/realms/agenticrag"
-    oidc_audience: str = "agenticrag-api"
-    oidc_spa_client_id: str = "agenticrag-spa"
-    oidc_jwks_url: str = ""
+    google_client_id: str = ""
+    google_admin_emails: str = ""
+    google_allowed_domain: str = ""
+    session_hours: int = 12
     cors_origins: str = (
         "http://localhost:5173,http://127.0.0.1:5173,"
         "http://localhost:5174,http://127.0.0.1:5174,"
@@ -32,14 +31,14 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    def admin_emails(self) -> set[str]:
+        return {e.strip().lower() for e in self.google_admin_emails.split(",") if e.strip()}
+
     def require_production_guards(self) -> None:
-        if not self.oidc_issuer.strip() or not self.oidc_audience.strip():
-            raise RuntimeError("OIDC_ISSUER and OIDC_AUDIENCE are required")
-        if self.environment.lower() != "production":
-            return
-        parsed = urlparse(self.oidc_issuer)
-        if parsed.scheme != "https":
-            raise RuntimeError("OIDC_ISSUER must use https when ENVIRONMENT=production")
+        if not self.google_client_id.strip():
+            raise RuntimeError(
+                "GOOGLE_CLIENT_ID is required. Create an OAuth 2.0 Web client in Google Cloud Console."
+            )
 
 
 @lru_cache

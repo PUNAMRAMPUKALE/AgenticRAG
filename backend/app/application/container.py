@@ -8,9 +8,10 @@ from app.application.conversation_service import ConversationService
 from app.application.health_service import HealthService
 from app.application.knowledge_service import KnowledgeService
 from app.core.config import Settings
-from app.domain.ports import AnswerCache, ConversationRepository, TokenVerifier
+from app.domain.ports import AnswerCache, ConversationRepository, IdentityProvider, SessionStore
 from app.infrastructure.cache.answers import RedisAnswerCache, connect_redis
-from app.infrastructure.identity.jwks import JwksTokenVerifier
+from app.infrastructure.identity.google import GoogleIdentity
+from app.infrastructure.identity.sessions import RedisSessionStore
 from app.infrastructure.llm.assistant import KnowledgeAssistant
 from app.infrastructure.persistence.conversations import PostgresConversationRepository
 from app.infrastructure.retrieval.markdown import MarkdownKnowledgeLoader
@@ -21,7 +22,8 @@ class AppContainer:
     settings: Settings
     conversations: ConversationRepository
     cache: AnswerCache
-    verifier: TokenVerifier
+    identity: IdentityProvider
+    sessions: SessionStore
     knowledge: KnowledgeService
     chat: ChatService
     conversation_queries: ConversationService
@@ -40,31 +42,32 @@ async def build_container(settings: Settings) -> AppContainer:
     await conversations.init_schema()
     if not await conversations.ping():
         raise RuntimeError(
-            "PostgreSQL is unavailable. From the repo root run: docker compose up -d postgres redis keycloak"
+            "PostgreSQL is unavailable. From the repo root run: docker compose up -d postgres redis"
         )
 
     redis_client = await connect_redis(settings.redis_url)
+    if redis_client is None:
+        raise RuntimeError(
+            "Redis is unavailable. From the repo root run: docker compose up -d postgres redis"
+        )
     cache = RedisAnswerCache(redis_client, ttl_seconds=settings.cache_ttl_seconds)
     knowledge = KnowledgeService(MarkdownKnowledgeLoader(), cache)
     knowledge.load()
     await cache.set_index_version(knowledge.index_version)
 
-    verifier = JwksTokenVerifier(
-        issuer=settings.oidc_issuer,
-        audience=settings.oidc_audience,
-        jwks_url=settings.oidc_jwks_url or None,
-    )
-    await verifier.warmup()
+    identity = GoogleIdentity(settings)
+    sessions = RedisSessionStore(redis_client, ttl_seconds=settings.session_hours * 3600)
 
     generator = KnowledgeAssistant()
     return AppContainer(
         settings=settings,
         conversations=conversations,
         cache=cache,
-        verifier=verifier,
+        identity=identity,
+        sessions=sessions,
         knowledge=knowledge,
         chat=ChatService(conversations, cache, generator),
         conversation_queries=ConversationService(conversations),
-        health=HealthService(settings, conversations, cache, verifier),
+        health=HealthService(settings, conversations, cache, identity),
         redis_client=redis_client,
     )
