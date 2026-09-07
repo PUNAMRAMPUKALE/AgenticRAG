@@ -26,3 +26,10 @@ class Conversation:
     user_id: str
     messages: list[Message] = field(default_factory=list)
     title: str = "New conversation"
+
+
+@dataclass(frozen=True)
+class ConversationSummary:
+    session_id: str
+    title: str
+    message_count: int

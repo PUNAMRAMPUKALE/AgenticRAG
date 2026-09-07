@@ -5,26 +5,23 @@ from collections.abc import Callable
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.security import AuthError, Principal, TokenVerifier
-from app.runtime import Runtime
-from app.store import ConversationStore
+from app.application.container import AppContainer
+from app.core.errors import AuthError
+from app.domain.identity import Principal
+from app.domain.ports import TokenVerifier
 
 _bearer = HTTPBearer(auto_error=False)
 
 
-def get_runtime(request: Request) -> Runtime:
-    runtime: Runtime | None = getattr(request.app.state, "runtime", None)
-    if runtime is None:
+def get_container(request: Request) -> AppContainer:
+    container: AppContainer | None = getattr(request.app.state, "container", None)
+    if container is None:
         raise HTTPException(503, "Application is not ready")
-    return runtime
+    return container
 
 
-def get_store(runtime: Runtime = Depends(get_runtime)) -> ConversationStore:
-    return runtime.store
-
-
-def get_verifier(runtime: Runtime = Depends(get_runtime)) -> TokenVerifier:
-    return runtime.verifier
+def get_verifier(container: AppContainer = Depends(get_container)) -> TokenVerifier:
+    return container.verifier
 
 
 def get_principal(
@@ -41,10 +38,7 @@ def get_principal(
 def require_any_role(*roles: str) -> Callable[..., Principal]:
     def _dep(principal: Principal = Depends(get_principal)) -> Principal:
         if principal.roles.isdisjoint(roles):
-            raise HTTPException(
-                403,
-                f"Insufficient role. Requires one of: {', '.join(roles)}",
-            )
+            raise HTTPException(403, f"Insufficient role. Requires one of: {', '.join(roles)}")
         return principal
 
     return _dep

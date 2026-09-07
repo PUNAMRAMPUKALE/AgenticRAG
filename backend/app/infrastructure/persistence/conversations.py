@@ -3,12 +3,12 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from app.models import Conversation, Message
-from app.orm import Base, ConversationRow, MessageRow
-from app.settings import Settings
+from app.core.config import Settings
+from app.domain.models import Conversation, ConversationSummary, Message
+from app.infrastructure.persistence.orm import Base, ConversationRow, MessageRow
 
 
-class ConversationStore:
+class PostgresConversationRepository:
     def __init__(self, settings: Settings):
         self.engine: AsyncEngine = create_async_engine(
             settings.database_url,
@@ -59,7 +59,7 @@ class ConversationStore:
                 ],
             )
 
-    async def list_for_user(self, user_id: str) -> list[dict]:
+    async def list_for_user(self, user_id: str) -> list[ConversationSummary]:
         async with self._sessions() as db:
             count_col = func.count(MessageRow.id)
             result = await db.execute(
@@ -70,7 +70,7 @@ class ConversationStore:
                 .order_by(ConversationRow.created_at.desc())
             )
             return [
-                {"session_id": sid, "title": title, "message_count": n}
+                ConversationSummary(session_id=sid, title=title, message_count=int(n))
                 for sid, title, n in result.all()
             ]
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from dataclasses import asdict
 
-from app.api.deps import get_store, require_any_role
-from app.core.security import ROLE_ADMIN, ROLE_ANALYST, Principal
-from app.store import ConversationStore
+from fastapi import APIRouter, Depends
+
+from app.api.deps import get_container, require_any_role
+from app.application.container import AppContainer
+from app.domain.identity import ROLE_ADMIN, ROLE_ANALYST, Principal
 
 router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
 
@@ -12,20 +14,19 @@ router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
 @router.get("")
 async def list_conversations(
     principal: Principal = Depends(require_any_role(ROLE_ANALYST, ROLE_ADMIN)),
-    store: ConversationStore = Depends(get_store),
+    container: AppContainer = Depends(get_container),
 ):
-    return {"conversations": await store.list_for_user(principal.subject)}
+    rows = await container.conversation_queries.list_for_user(principal.subject)
+    return {"conversations": [asdict(r) for r in rows]}
 
 
 @router.get("/{session_id}")
 async def get_conversation(
     session_id: str,
     principal: Principal = Depends(require_any_role(ROLE_ANALYST, ROLE_ADMIN)),
-    store: ConversationStore = Depends(get_store),
+    container: AppContainer = Depends(get_container),
 ):
-    conv = await store.get(session_id, principal.subject)
-    if not conv:
-        raise HTTPException(404, "Conversation not found")
+    conv = await container.conversation_queries.get_for_user(session_id, principal.subject)
     return {
         "session_id": conv.session_id,
         "title": conv.title,
