@@ -106,6 +106,10 @@ KNOWLEDGE_S3_BUCKET=your-company-knowledge
 KNOWLEDGE_S3_PREFIX=knowledge
 KNOWLEDGE_S3_REGION=us-east-1
 KNOWLEDGE_S3_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123/knowledge-events
+AWS_DEFAULT_REGION=us-east-1
+# Prefer an IAM role in production. Access keys are for local/dev only.
+LLM_API_KEY=
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
 Add your production HTTPS origin to the Google OAuth client. Serve UI and API on the same site so the session cookie is first-party.
