@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.domain.models import Conversation, ConversationSummary, Message
-from app.infrastructure.persistence.migrate import run_alembic_upgrade
+from app.infrastructure.persistence.alembic_runner import run_alembic_upgrade
 from app.infrastructure.persistence.orm import (
     ConversationRow,
     MessageRow,
