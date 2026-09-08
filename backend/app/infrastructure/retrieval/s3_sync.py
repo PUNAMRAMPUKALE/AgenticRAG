@@ -62,7 +62,10 @@ class KnowledgeS3Pipeline:
                 await asyncio.gather(self._consume_queue(), self._reconcile_loop())
             else:
                 while True:
-                    await self.sync_now()
+                    try:
+                        await self.sync_now()
+                    except Exception:
+                        log.exception("S3 ingest poll failed; will retry")
                     await asyncio.sleep(self._poll)
         except asyncio.CancelledError:
             return
@@ -71,10 +74,16 @@ class KnowledgeS3Pipeline:
         if self._reconcile <= 0:
             await asyncio.Future()
             return
-        await self.sync_now()
+        await self._safe_sync()
         while True:
             await asyncio.sleep(self._reconcile)
+            await self._safe_sync()
+
+    async def _safe_sync(self) -> None:
+        try:
             await self.sync_now()
+        except Exception:
+            log.exception("S3 ingest reconcile failed; will retry")
 
     def _sqs(self):
         return boto_client("sqs", self._region)

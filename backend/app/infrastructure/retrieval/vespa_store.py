@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import logging
@@ -45,11 +46,17 @@ class VespaChunkStore:
         return f"{self._base}/document/v1/default/knowledge_source/docid/{doc_id}"
 
     async def ping(self) -> bool:
-        if not self._base:
+        return await self._ping_url(f"{self._base}/state/v1/health")
+
+    async def ping_config(self) -> bool:
+        return await self._ping_url(f"{self._config}/state/v1/health")
+
+    async def _ping_url(self, url: str) -> bool:
+        if not url.startswith("http"):
             return False
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self._base}/state/v1/health")
+                response = await client.get(url)
             return response.status_code < 500
         except httpx.HTTPError:
             return False
@@ -57,12 +64,20 @@ class VespaChunkStore:
     async def ensure_ready(self) -> None:
         if not self._base:
             raise RuntimeError("VESPA_URL is empty. Set VESPA_URL=http://127.0.0.1:8080")
-        if not await self.ping():
+        if not await self.ping_config() and not await self.ping():
             raise RuntimeError(
                 "Vespa is not running. From the repo root: docker compose up -d postgres redis vespa"
             )
         if self._auto_deploy:
             await self._deploy_app()
+        for attempt in range(45):
+            if await self.ping():
+                return
+            log.info("Waiting for Vespa query port 8080 after deploy (%s/45)", attempt + 1)
+            await asyncio.sleep(2)
+        raise RuntimeError(
+            "Vespa config is up but query port 8080 did not come up. Check docker logs for vespa."
+        )
 
     async def _deploy_app(self) -> None:
         if not _APP_DIR.is_dir():
