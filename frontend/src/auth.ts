@@ -11,6 +11,19 @@ export type AuthConfig = {
 
 const creds: RequestInit = { credentials: "include" };
 
+function apiErrorMessage(body: string, fallback: string): string {
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+  } catch {
+    /* not JSON */
+  }
+  const trimmed = body.trim();
+  return trimmed || fallback;
+}
+
 export async function loadAuthConfig(): Promise<AuthConfig> {
   const res = await fetch("/v1/auth/config", { ...creds, signal: AbortSignal.timeout(8000) });
   if (!res.ok) {
@@ -35,7 +48,7 @@ export async function signInWithGoogleIdToken(idToken: string): Promise<Me> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(body || `Google sign-in failed (${res.status})`);
+    throw new Error(apiErrorMessage(body, `Google sign-in failed (${res.status})`));
   }
   return (await res.json()) as Me;
 }

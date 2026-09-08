@@ -6,9 +6,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from sqlalchemy import event, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
+from app.core.errors import AppError
 from app.domain.models import Conversation, ConversationSummary, Message
 from app.infrastructure.persistence.migrate import run_alembic_upgrade
 from app.infrastructure.persistence.orm import (
@@ -30,6 +32,9 @@ class PostgresConversationRepository:
             max_overflow=10,
         )
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
+        self._schema_ready = asyncio.Event()
+        if not settings.migrate_on_boot:
+            self._schema_ready.set()
 
         @event.listens_for(self.engine.sync_engine, "checkout")
         def _reset_role(dbapi_connection, connection_record, connection_proxy) -> None:
@@ -44,12 +49,14 @@ class PostgresConversationRepository:
 
     async def migrate(self) -> None:
         if not self._settings.migrate_on_boot:
+            self._schema_ready.set()
             return
         admin = self._settings.database_admin_url.strip() or self._settings.database_url
         await asyncio.to_thread(run_alembic_upgrade, admin)
         if admin == self._settings.database_url:
             async with self.engine.begin() as conn:
                 await apply_rls(conn)
+            self._schema_ready.set()
             return
         from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -59,6 +66,7 @@ class PostgresConversationRepository:
                 await apply_rls(conn)
         finally:
             await admin_engine.dispose()
+        self._schema_ready.set()
 
 
     async def ping(self) -> bool:
@@ -69,10 +77,28 @@ class PostgresConversationRepository:
         except Exception:
             return False
 
+    async def _wait_schema(self) -> None:
+        if self._schema_ready.is_set():
+            return
+        try:
+            await asyncio.wait_for(self._schema_ready.wait(), timeout=30)
+        except TimeoutError as exc:
+            raise AppError(
+                503,
+                "Postgres is still applying the chat schema. Try sign-in again in a few seconds.",
+            ) from exc
+
     @asynccontextmanager
     async def _ctx(self, user_id: str, is_manager: bool, *, service: bool = False):
+        await self._wait_schema()
         async with self._sessions() as db:
-            await apply_row_context(db, user_id=user_id, is_manager=is_manager, service=service)
+            try:
+                await apply_row_context(db, user_id=user_id, is_manager=is_manager, service=service)
+            except SQLAlchemyError as exc:
+                raise AppError(
+                    503,
+                    "Postgres row security is not ready. The API can serve login config, but sign-in waits on schema.",
+                ) from exc
             yield db
             await db.commit()
 
@@ -178,9 +204,12 @@ class PostgresConversationRepository:
                 conv.last_message_at = datetime.now(timezone.utc)
 
     async def count(self) -> int:
-        async with self._ctx("", False, service=True) as db:
-            n = await db.scalar(select(func.count()).select_from(ConversationRow))
+        try:
+            async with self.engine.connect() as conn:
+                n = await conn.scalar(select(func.count()).select_from(ConversationRow))
             return int(n or 0)
+        except SQLAlchemyError:
+            return 0
 
     async def close(self) -> None:
         await self.engine.dispose()

@@ -3,8 +3,22 @@
 -- The API sets: app.current_user_id, app.is_manager, app.service_role
 -- then SET ROLE agenticrag_app so the table owner cannot skip RLS.
 
-CREATE ROLE IF NOT EXISTS agenticrag_app NOINHERIT NOSUPERUSER;
-GRANT agenticrag_app TO CURRENT_USER;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agenticrag_app') THEN
+    CREATE ROLE agenticrag_app NOINHERIT NOSUPERUSER;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_auth_members m
+    JOIN pg_roles r ON r.oid = m.roleid
+    JOIN pg_roles u ON u.oid = m.member
+    WHERE r.rolname = 'agenticrag_app' AND u.rolname = current_user
+  ) THEN
+    EXECUTE format('GRANT agenticrag_app TO %I', current_user);
+  END IF;
+END
+$$;
 
 CREATE OR REPLACE FUNCTION app_current_user_id()
 RETURNS TEXT
@@ -40,11 +54,30 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 );
 
 CREATE TABLE IF NOT EXISTS requests (
-    id UUID PRIMARY KEY,
+    id VARCHAR(36) PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     session_id VARCHAR(36),
     user_query TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_ingest_runs (
+    run_id VARCHAR(36) PRIMARY KEY,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    actor VARCHAR(255) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    knowledge_source VARCHAR(16) NOT NULL,
+    embedding_model VARCHAR(128) NOT NULL DEFAULT '',
+    index_version VARCHAR(32) NOT NULL DEFAULT '',
+    files_seen INTEGER NOT NULL DEFAULT 0,
+    files_rechunked INTEGER NOT NULL DEFAULT 0,
+    files_reused INTEGER NOT NULL DEFAULT 0,
+    files_deleted INTEGER NOT NULL DEFAULT 0,
+    chunks_indexed INTEGER NOT NULL DEFAULT 0,
+    error_detail TEXT,
+    CONSTRAINT ck_ingest_runs_status CHECK (status IN ('running', 'succeeded', 'failed')),
+    CONSTRAINT ck_ingest_runs_source CHECK (knowledge_source IN ('s3', 'local'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_user_created ON requests (user_id, created_at DESC);

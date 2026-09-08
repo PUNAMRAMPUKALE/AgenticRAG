@@ -59,6 +59,12 @@ class HealthService:
         google_ok = self._identity.ready
         redis_ok = self._cache.enabled
         vespa_ok = await self._vespa.ping() if self._vespa is not None else False
+        conversation_count = 0
+        if pg_ok:
+            try:
+                conversation_count = await self._conversations.count()
+            except Exception:
+                conversation_count = 0
         return HealthStatus(
             ok=pg_ok and google_ok and redis_ok and vespa_ok,
             environment=self._settings.environment,
@@ -70,7 +76,7 @@ class HealthService:
             index_version=index_version,
             cache_ttl_seconds=self._settings.cache_ttl_seconds,
             llm_enabled=bool(self._settings.llm_api_key.strip()),
-            conversations=await self._conversations.count() if pg_ok else 0,
+            conversations=conversation_count,
             ingest_watch=ingest_watch,
             knowledge_source=self._settings.knowledge_source.strip().lower() or "local",
             embeddings=bool(self._settings.llm_api_key.strip()),

@@ -14,7 +14,10 @@ router = APIRouter(tags=["ops"])
 async def health(request: Request):
     container: AppContainer = get_container(request)
     knowledge = container.knowledge
-    docs = knowledge.live_chunk_count()
+    try:
+        docs = knowledge.live_chunk_count()
+    except Exception:
+        docs = 0
     knowledge.docs_indexed = docs
     ingest_watch = container.s3_pipeline is not None or container.ingest_watcher is not None
     status = await container.health.status(

@@ -316,11 +316,14 @@ class VespaChunkStore:
     def count_chunks(self) -> int:
         if not self._base:
             return 0
-        with httpx.Client(timeout=15.0) as client:
-            response = client.post(
-                f"{self._base}/search/",
-                json={"yql": "select * from knowledge_chunk where true", "hits": 0, "timeout": "5s"},
-            )
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                response = client.post(
+                    f"{self._base}/search/",
+                    json={"yql": "select * from knowledge_chunk where true", "hits": 0, "timeout": "5s"},
+                )
+        except httpx.HTTPError:
+            return 0
         if response.status_code >= 400:
             return 0
         return int(((response.json().get("root") or {}).get("fields") or {}).get("totalCount") or 0)
