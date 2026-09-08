@@ -103,6 +103,11 @@ async def build_container(settings: Settings, *, run_ingest: bool | None = None)
             poll_seconds=settings.knowledge_s3_poll_seconds,
             queue_url=settings.knowledge_s3_queue_url,
             region=settings.knowledge_s3_region.strip() or None,
+            loader=loader if isinstance(loader, S3CorpusLoader) else None,
+            dlq_url=settings.knowledge_s3_dlq_url,
+            max_receive=settings.knowledge_s3_max_receive,
+            visibility_timeout=settings.knowledge_s3_visibility_timeout,
+            reconcile_seconds=settings.knowledge_s3_reconcile_seconds,
         )
     elif disk_loader is not None and settings.knowledge_watch:
         ingest_watcher = KnowledgeIngestWatcher(

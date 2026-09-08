@@ -94,3 +94,40 @@ async def sync_incremental(
         reused_files=reused,
         docs_indexed=docs_indexed,
     )
+
+
+async def sync_one(
+    store,
+    *,
+    source_key: str,
+    etag: str,
+    fetch_bytes: Callable[[str], Awaitable[bytes]],
+    deleted: bool = False,
+) -> str:
+    """Ingest or delete a single source. Returns changed, reused, deleted, or empty."""
+    embedder = get_embedder()
+    model = embedder.model if embedder else ""
+    if hasattr(store, "ensure_ready"):
+        await store.ensure_ready()
+    if deleted:
+        await store.delete_sources([source_key])
+        log.info("Deleted %s from Vespa", source_key)
+        return "deleted"
+    stored = ""
+    if hasattr(store, "source_etag"):
+        stored = await store.source_etag(source_key) or ""
+    if stored == etag and etag:
+        return "reused"
+    data = await fetch_bytes(source_key)
+    chunks = await asyncio.to_thread(ingest_bytes, source_key, data)
+    if not chunks:
+        log.warning("No usable chunks from %s", source_key)
+        await store.replace_source(source_key, etag, model, [], np.zeros((0, 0), dtype=np.float32))
+        return "empty"
+    if embedder:
+        vectors = await asyncio.to_thread(embedder.embed, [c.text for c in chunks])
+    else:
+        vectors = np.zeros((0, 0), dtype=np.float32)
+    await store.replace_source(source_key, etag, model, chunks, vectors)
+    log.info("Re-chunked and stored %s (%s chunks)", source_key, len(chunks))
+    return "changed"

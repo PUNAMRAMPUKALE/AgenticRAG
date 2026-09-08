@@ -9,7 +9,7 @@ from app.domain.models import Chunk
 from app.domain.ports import AnswerCache, KnowledgeLoader, SearchIndex
 from app.infrastructure.llm.embeddings import get_embedder
 from app.infrastructure.persistence.ingest_runs import IngestRunRepository
-from app.infrastructure.retrieval.incremental import stamp_fingerprint, sync_incremental
+from app.infrastructure.retrieval.incremental import stamp_fingerprint, sync_incremental, sync_one
 from app.infrastructure.retrieval.vespa_store import VespaChunkStore
 
 log = logging.getLogger(__name__)
@@ -131,6 +131,112 @@ class KnowledgeService:
             docs_indexed=self.docs_indexed,
             flushed_keys=flushed,
             reindexed_by=actor,
+        )
+
+    async def ingest_object(self, source_key: str, *, deleted: bool, actor: str) -> str:
+        """Process one S3 object. Returns changed, reused, deleted, or empty."""
+        if self._vector_store is None or not hasattr(self._loader, "read_bytes"):
+            raise RuntimeError("Per-object ingest requires Vespa and an S3 loader.")
+        async with self._lock:
+            self.ingesting = True
+            try:
+                treat_deleted = deleted
+                etag = ""
+                if not treat_deleted and hasattr(self._loader, "head_etag"):
+                    found = await asyncio.to_thread(self._loader.head_etag, source_key)
+                    if found is None:
+                        treat_deleted = True
+                    else:
+                        etag = found
+                outcome = await sync_one(
+                    self._vector_store,
+                    source_key=source_key,
+                    etag=etag,
+                    fetch_bytes=self._fetch_bytes,
+                    deleted=treat_deleted,
+                )
+                files_deleted = 1 if treat_deleted else 0
+                files_rechunked = 1 if outcome in {"changed", "empty"} else 0
+                files_reused = 1 if outcome == "reused" else 0
+                await self._after_object(
+                    actor,
+                    outcome,
+                    source_key=source_key,
+                    files_deleted=files_deleted,
+                    files_rechunked=files_rechunked,
+                    files_reused=files_reused,
+                )
+                return outcome
+            except Exception as exc:
+                if self._ingest_runs is not None:
+                    await self._ingest_runs.record(
+                        actor=actor,
+                        status="failed",
+                        knowledge_source=self._knowledge_source,
+                        embedding_model="",
+                        index_version=self.index_version,
+                        files_seen=1,
+                        files_rechunked=0,
+                        files_reused=0,
+                        files_deleted=0,
+                        chunks_indexed=self.docs_indexed,
+                        error_detail=f"{source_key}: {exc}"[:2000],
+                    )
+                raise
+            finally:
+                self.ingesting = False
+
+    async def _fetch_bytes(self, source_key: str) -> bytes:
+        return await asyncio.to_thread(self._loader.read_bytes, source_key)
+
+    async def _after_object(
+        self,
+        actor: str,
+        outcome: str,
+        *,
+        source_key: str,
+        files_deleted: int,
+        files_rechunked: int,
+        files_reused: int,
+    ) -> None:
+        from app.infrastructure.retrieval.vespa_index import VespaSearchIndex
+
+        self.index = VespaSearchIndex(self._vector_store)
+        self.last_changed_files = files_rechunked
+        self.last_reused_files = files_reused
+        self.docs_indexed = self._vector_store.count_chunks() if self._vector_store else 0
+        if outcome != "reused":
+            self.index_version = stamp_fingerprint({source_key: f"{outcome}:{self.docs_indexed}"})
+            flushed = await self._cache.flush_answers()
+            await self._cache.set_index_version(self.index_version)
+        else:
+            flushed = 0
+        if self._ingest_runs is not None:
+            model = ""
+            embedder = get_embedder()
+            if embedder:
+                model = embedder.model
+            await self._ingest_runs.record(
+                actor=actor,
+                status="succeeded",
+                knowledge_source=self._knowledge_source,
+                embedding_model=model,
+                index_version=self.index_version,
+                files_seen=files_deleted + files_rechunked + files_reused,
+                files_rechunked=files_rechunked,
+                files_reused=files_reused,
+                files_deleted=files_deleted,
+                chunks_indexed=self.docs_indexed,
+            )
+        log.info(
+            "Object ingest %s %s by %s (deleted=%s rechunked=%s reused=%s flushed=%s)",
+            source_key,
+            outcome,
+            actor,
+            files_deleted,
+            files_rechunked,
+            files_reused,
+            flushed,
         )
 
     async def snapshot(self, *, file_id: str | None = None, offset: int = 0, limit: int = 50) -> dict:

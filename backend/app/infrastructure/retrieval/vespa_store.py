@@ -85,6 +85,22 @@ class VespaChunkStore:
         except httpx.HTTPError:
             log.warning("Vespa config server not reachable at %s", self._config, exc_info=True)
 
+    async def source_etag(self, source_key: str) -> str | None:
+        if not self._base:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(self._source_url(source_key))
+        except httpx.HTTPError:
+            return None
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            log.warning("Vespa source get %s HTTP %s", source_key, response.status_code)
+            return None
+        fields = (response.json() or {}).get("fields") or {}
+        return str(fields.get("etag") or "")
+
     async def stamps(self) -> dict[str, str]:
         stamps: dict[str, str] = {}
         for fields in await self._visit_fields("knowledge_source"):

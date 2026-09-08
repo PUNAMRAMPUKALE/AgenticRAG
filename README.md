@@ -23,12 +23,19 @@ Postgres for conversation history. Redis for answer cache and login sessions. **
 ```
 Author / CMS  →  S3 (original files)
                      │
-                     ▼
-              ingest worker: GetObject → clean → chunk → embed → Vespa
+                     ├─ Object Created / Deleted → SQS (+ DLQ)
+                     │                              │
+                     │                              ▼
+                     │                    ingest worker: one object
+                     │                    GetObject → chunk → embed → Vespa
+                     │
+                     └─ periodic reconcile (optional)
                      │
                      ▼
               API chat: embed query → Vespa hybrid search → LLM
 ```
+
+Set `KNOWLEDGE_S3_QUEUE_URL` and run `python -m app.worker.ingest`. Point the bucket (prefix) at that queue. Set `KNOWLEDGE_S3_DLQ_URL` (or an SQS redrive policy) so failed objects leave the main queue after `KNOWLEDGE_S3_MAX_RECEIVE` attempts. Without a queue URL the worker still lists the bucket on a timer.
 
 Cleaning: Unicode NFKC, strip control chars, collapse whitespace, repair PDF hyphen/line wrap, drop empty or low-signal extracts.
 
@@ -107,6 +114,8 @@ KNOWLEDGE_S3_BUCKET=your-company-knowledge
 KNOWLEDGE_S3_PREFIX=knowledge
 KNOWLEDGE_S3_REGION=us-east-1
 KNOWLEDGE_S3_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123/knowledge-events
+KNOWLEDGE_S3_DLQ_URL=https://sqs.us-east-1.amazonaws.com/123/knowledge-events-dlq
+INGEST_IN_API=false
 AWS_DEFAULT_REGION=us-east-1
 # Prefer an IAM role in production. Access keys are for local/dev only.
 LLM_API_KEY=
@@ -117,4 +126,4 @@ Add your production HTTPS origin to the Google OAuth client. Serve UI and API on
 
 ## What is still later
 
-Dense/hybrid pgvector search, Alembic in CI, MCP, HITL. Retrieval is still TF-IDF over the knowledge corpus.
+MCP, HITL, and an IAM app DB user in every environment. Retrieval is Vespa hybrid search. Ingest is an SQS worker when `KNOWLEDGE_S3_QUEUE_URL` is set.

@@ -28,6 +28,7 @@ class HealthStatus:
     files_rechunked: int
     files_reused: int
     ingest_in_api: bool
+    ingest_queue: bool
 
 
 class HealthService:
@@ -78,4 +79,5 @@ class HealthService:
             files_rechunked=files_rechunked,
             files_reused=files_reused,
             ingest_in_api=self._settings.ingest_in_api,
+            ingest_queue=bool(self._settings.knowledge_s3_queue_url.strip()),
         )

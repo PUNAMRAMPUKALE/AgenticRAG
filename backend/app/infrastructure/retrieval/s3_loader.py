@@ -73,6 +73,33 @@ class S3CorpusLoader:
     def list_stamps(self) -> dict[str, str]:
         return self.list_etags()
 
+    def to_source_key(self, object_key: str) -> str | None:
+        key = object_key.replace("\\", "/").lstrip("/")
+        if self._prefix:
+            prefix = self._prefix + "/"
+            if not key.startswith(prefix):
+                return None
+            rel = key[len(prefix) :]
+        else:
+            rel = key
+        return _safe_relative(rel)
+
+    def head_etag(self, source_key: str) -> str | None:
+        from botocore.exceptions import ClientError
+
+        client = self._client()
+        try:
+            resp = client.head_object(Bucket=self._bucket, Key=self._object_key(source_key))
+        except ClientError as exc:
+            code = str((exc.response or {}).get("Error", {}).get("Code") or "")
+            if code in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise
+        return str(resp.get("ETag") or "").strip('"') or None
+
+    def bucket_name(self) -> str:
+        return self._bucket
+
     def read_bytes(self, source_key: str) -> bytes:
         client = self._client()
         return client.get_object(Bucket=self._bucket, Key=self._object_key(source_key))["Body"].read()

@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     knowledge_s3_region: str = ""
     knowledge_s3_poll_seconds: float = 30.0
     knowledge_s3_queue_url: str = ""
+    knowledge_s3_dlq_url: str = ""
+    knowledge_s3_max_receive: int = 5
+    knowledge_s3_visibility_timeout: int = 900
+    knowledge_s3_reconcile_seconds: float = 3600.0
     vespa_url: str = "http://127.0.0.1:8080"
     vespa_config_url: str = "http://127.0.0.1:19071"
     ingest_in_api: bool = True
