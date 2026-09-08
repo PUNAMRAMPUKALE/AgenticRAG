@@ -326,7 +326,12 @@ export default function App() {
       for (const part of parts) {
         const line = part.replace(/^data:\s*/, "");
         if (!line) continue;
-        const ev = JSON.parse(line) as Record<string, unknown>;
+        let ev: Record<string, unknown>;
+        try {
+          ev = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
         if (ev.type === "session" && typeof ev.session_id === "string") {
           setSessionId(ev.session_id);
           if (typeof ev.redis === "boolean") setRedisOn(ev.redis);
