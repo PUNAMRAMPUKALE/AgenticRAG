@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_container, require_any_role
 from app.application.container import AppContainer
+from app.core.errors import AppError
 from app.domain.identity import CHAT_ROLES, REINDEX_ROLES, Principal
+from app.infrastructure.retrieval.ingest_queue import enqueue_full_reindex
 
 router = APIRouter(prefix="/v1", tags=["admin"])
 
@@ -14,14 +18,35 @@ async def reindex(
     principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
-    result = await container.knowledge.reindex(principal.username)
-    return {
-        "ok": True,
-        "index_version": result.index_version,
-        "docs_indexed": result.docs_indexed,
-        "flushed_keys": result.flushed_keys,
-        "reindexed_by": result.reindexed_by,
-    }
+    settings = container.settings
+    queue_url = settings.knowledge_s3_queue_url.strip()
+    if queue_url:
+        await asyncio.to_thread(
+            enqueue_full_reindex,
+            queue_url,
+            principal.username,
+            settings.knowledge_s3_region.strip() or None,
+        )
+        return {
+            "ok": True,
+            "queued": True,
+            "reindexed_by": principal.username,
+            "detail": "Full reindex queued for the ingest worker.",
+        }
+    if settings.ingest_in_api or settings.knowledge_source.strip().lower() != "s3":
+        result = await container.knowledge.reindex(principal.username)
+        return {
+            "ok": True,
+            "queued": False,
+            "index_version": result.index_version,
+            "docs_indexed": result.docs_indexed,
+            "flushed_keys": result.flushed_keys,
+            "reindexed_by": result.reindexed_by,
+        }
+    raise AppError(
+        503,
+        "Ingest runs in the worker. Set KNOWLEDGE_S3_QUEUE_URL or INGEST_IN_API=true for local single-process.",
+    )
 
 
 @router.get("/knowledge")

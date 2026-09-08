@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 from pathlib import Path
 
-from app.infrastructure.retrieval.ingest import ingest_bytes
 from app.infrastructure.retrieval.incremental import stamp_fingerprint
-from app.infrastructure.retrieval.sparse import build_index
-
-log = logging.getLogger(__name__)
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parents[3] / "knowledge"
 SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf", ".xlsx", ".xlsm", ".jsonl"}
@@ -61,23 +56,6 @@ class CorpusKnowledgeLoader:
         if not str(path).startswith(str(self._dir.resolve())):
             raise ValueError("Invalid knowledge path")
         return path.read_bytes()
-
-    def load(self):
-        chunks = []
-        files = iter_source_files(self._dir)
-        for path in files:
-            rel = path.relative_to(self._dir).as_posix()
-            try:
-                built = ingest_bytes(rel, path.read_bytes())
-            except Exception:
-                log.exception("Failed to ingest %s", path)
-                continue
-            if not built:
-                log.warning("No usable chunks from %s", path)
-                continue
-            chunks.extend(built)
-        log.info("Loaded %s chunks from %s files in %s", len(chunks), len(files), self._dir)
-        return chunks, build_index(chunks), self.fingerprint()
 
 
 MarkdownKnowledgeLoader = CorpusKnowledgeLoader

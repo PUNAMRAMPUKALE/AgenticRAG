@@ -4,12 +4,34 @@ import json
 from dataclasses import dataclass
 from urllib.parse import unquote_plus
 
+from app.infrastructure.retrieval.ingest_queue import FULL_REINDEX_TYPE
+
 
 @dataclass(frozen=True)
 class ObjectJob:
     bucket: str
     object_key: str
     deleted: bool
+
+
+def parse_reindex_command(body: str) -> str | None:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("Message"), str):
+        try:
+            inner = json.loads(payload["Message"])
+        except json.JSONDecodeError:
+            return None
+        if isinstance(inner, dict):
+            payload = inner
+    if payload.get("type") != FULL_REINDEX_TYPE:
+        return None
+    actor = str(payload.get("actor") or "reindex").strip() or "reindex"
+    return actor
 
 
 def parse_sqs_jobs(body: str) -> list[ObjectJob]:

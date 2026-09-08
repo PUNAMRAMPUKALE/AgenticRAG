@@ -27,9 +27,10 @@ _TENANT_ID = "default"
 class VespaChunkStore:
     """Production Vespa store: knowledge_source registry + knowledge_chunk tensors."""
 
-    def __init__(self, base_url: str, config_url: str = "http://127.0.0.1:19071"):
+    def __init__(self, base_url: str, config_url: str = "http://127.0.0.1:19071", *, auto_deploy: bool = True):
         self._base = (base_url or "").rstrip("/")
         self._config = (config_url or "http://127.0.0.1:19071").rstrip("/")
+        self._auto_deploy = auto_deploy
 
     @property
     def enabled(self) -> bool:
@@ -60,7 +61,8 @@ class VespaChunkStore:
             raise RuntimeError(
                 "Vespa is not running. From the repo root: docker compose up -d postgres redis vespa"
             )
-        await self._deploy_app()
+        if self._auto_deploy:
+            await self._deploy_app()
 
     async def _deploy_app(self) -> None:
         if not _APP_DIR.is_dir():

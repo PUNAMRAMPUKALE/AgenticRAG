@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     knowledge_s3_reconcile_seconds: float = 3600.0
     vespa_url: str = "http://127.0.0.1:8080"
     vespa_config_url: str = "http://127.0.0.1:19071"
-    ingest_in_api: bool = True
+    ingest_in_api: bool = False
     migrate_on_boot: bool = True
     database_admin_url: str = ""
     aws_secrets_arn: str = ""
@@ -76,8 +76,17 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "GOOGLE_CLIENT_ID is required. Create an OAuth 2.0 Web client in Google Cloud Console."
             )
-        if self.knowledge_source.strip().lower() == "s3" and not self.knowledge_s3_bucket.strip():
-            raise RuntimeError("KNOWLEDGE_S3_BUCKET is required when KNOWLEDGE_SOURCE=s3.")
+        if not self.google_allowed_domain.strip():
+            raise RuntimeError("GOOGLE_ALLOWED_DOMAIN is required in production (e.g. yourcompany.com).")
+        if self.ingest_in_api:
+            raise RuntimeError("INGEST_IN_API must be false in production. Run python -m app.worker.ingest.")
+        if self.migrate_on_boot:
+            raise RuntimeError("MIGRATE_ON_BOOT must be false in production. Run Alembic in deploy.")
+        if self.knowledge_source.strip().lower() == "s3":
+            if not self.knowledge_s3_bucket.strip():
+                raise RuntimeError("KNOWLEDGE_S3_BUCKET is required when KNOWLEDGE_SOURCE=s3.")
+            if not self.knowledge_s3_queue_url.strip():
+                raise RuntimeError("KNOWLEDGE_S3_QUEUE_URL is required in production so the API does not ingest.")
 
 
 @lru_cache

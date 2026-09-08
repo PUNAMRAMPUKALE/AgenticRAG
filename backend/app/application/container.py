@@ -78,7 +78,12 @@ async def build_container(settings: Settings, *, run_ingest: bool | None = None)
         disk_loader = CorpusKnowledgeLoader()
         loader = disk_loader
     vespa_url = settings.vespa_url.strip() or "http://127.0.0.1:8080"
-    vespa = VespaChunkStore(vespa_url, config_url=settings.vespa_config_url.strip() or "http://127.0.0.1:19071")
+    start_ingest = settings.ingest_in_api if run_ingest is None else run_ingest
+    vespa = VespaChunkStore(
+        vespa_url,
+        config_url=settings.vespa_config_url.strip() or "http://127.0.0.1:19071",
+        auto_deploy=bool(run_ingest or start_ingest),
+    )
     ingest_runs = IngestRunRepository(conversations.engine)
     knowledge = KnowledgeService(
         loader,
@@ -96,7 +101,6 @@ async def build_container(settings: Settings, *, run_ingest: bool | None = None)
     generator = KnowledgeAssistant()
     ingest_watcher: KnowledgeIngestWatcher | None = None
     s3_pipeline: KnowledgeS3Pipeline | None = None
-    start_ingest = settings.ingest_in_api if run_ingest is None else run_ingest
     if source == "s3" and start_ingest:
         s3_pipeline = KnowledgeS3Pipeline(
             knowledge,

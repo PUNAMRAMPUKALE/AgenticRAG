@@ -112,11 +112,12 @@ REDIS_URL=redis://...
 KNOWLEDGE_SOURCE=s3
 KNOWLEDGE_S3_BUCKET=your-company-knowledge
 KNOWLEDGE_S3_PREFIX=knowledge
-KNOWLEDGE_S3_REGION=us-east-1
-KNOWLEDGE_S3_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123/knowledge-events
-KNOWLEDGE_S3_DLQ_URL=https://sqs.us-east-1.amazonaws.com/123/knowledge-events-dlq
+KNOWLEDGE_S3_REGION=us-east-2
+KNOWLEDGE_S3_QUEUE_URL=https://sqs.us-east-2.amazonaws.com/123/knowledge-events
+KNOWLEDGE_S3_DLQ_URL=https://sqs.us-east-2.amazonaws.com/123/knowledge-events-dlq
 INGEST_IN_API=false
-AWS_DEFAULT_REGION=us-east-1
+MIGRATE_ON_BOOT=false
+AWS_DEFAULT_REGION=us-east-2
 # Prefer an IAM role in production. Access keys are for local/dev only.
 LLM_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
@@ -126,4 +127,4 @@ Add your production HTTPS origin to the Google OAuth client. Serve UI and API on
 
 ## What is still later
 
-MCP, HITL, and an IAM app DB user in every environment. Retrieval is Vespa hybrid search. Ingest is an SQS worker when `KNOWLEDGE_S3_QUEUE_URL` is set.
+MCP, HITL, CI test suite, and a dedicated `agenticrag_app` DB password in every environment. Production refuses to boot without a Google domain, SQS ingest queue, `INGEST_IN_API=false`, and `MIGRATE_ON_BOOT=false`. Manager reindex enqueues to SQS.

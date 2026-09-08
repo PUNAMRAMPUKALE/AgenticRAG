@@ -47,11 +47,9 @@ async def apply_row_context(
     is_manager: bool = False,
     service: bool = False,
 ) -> None:
-    try:
-        async with db.begin_nested():
-            await db.execute(text("SET LOCAL ROLE agenticrag_app"))
-    except Exception:
-        pass
+    current = await db.scalar(text("SELECT current_user"))
+    if str(current) != "agenticrag_app":
+        await db.execute(text("SET LOCAL ROLE agenticrag_app"))
     await db.execute(
         text("SELECT set_config('app.current_user_id', :uid, true)"),
         {"uid": user_id},

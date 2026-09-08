@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from app.domain.models import Chunk
 from app.infrastructure.retrieval.corpus import SUPPORTED_SUFFIXES
-from app.infrastructure.retrieval.ingest import ingest_bytes
 from app.infrastructure.retrieval.incremental import stamp_fingerprint
-from app.infrastructure.retrieval.sparse import SparseIndex, build_index
 from app.infrastructure.aws import boto_client
-
-log = logging.getLogger(__name__)
 
 
 def _is_supported_key(key: str) -> bool:
@@ -103,22 +97,3 @@ class S3CorpusLoader:
     def read_bytes(self, source_key: str) -> bytes:
         client = self._client()
         return client.get_object(Bucket=self._bucket, Key=self._object_key(source_key))["Body"].read()
-
-    def load(self) -> tuple[list[Chunk], SparseIndex, str]:
-        client = self._client()
-        etags = self.list_etags()
-        chunks: list[Chunk] = []
-        for rel in sorted(etags):
-            try:
-                body = client.get_object(Bucket=self._bucket, Key=self._object_key(rel))["Body"].read()
-                built = ingest_bytes(rel, body)
-            except Exception:
-                log.exception("Failed to ingest s3://%s/%s", self._bucket, self._object_key(rel))
-                continue
-            if not built:
-                log.warning("No usable chunks from s3://%s/%s", self._bucket, self._object_key(rel))
-                continue
-            chunks.extend(built)
-        version = self.fingerprint()
-        log.info("Loaded %s chunks from %s S3 objects in s3://%s/%s", len(chunks), len(etags), self._bucket, self._prefix)
-        return chunks, build_index(chunks), version

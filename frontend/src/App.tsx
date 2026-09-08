@@ -150,7 +150,16 @@ export default function App() {
       setCacheBanner(`Reindex failed (${res.status}).`);
       return;
     }
-    const data = (await res.json()) as { index_version: string; flushed_keys: number };
+    const data = (await res.json()) as {
+      queued?: boolean;
+      index_version?: string;
+      flushed_keys?: number;
+      detail?: string;
+    };
+    if (data.queued) {
+      setCacheBanner(data.detail || "Reindex queued for the ingest worker.");
+      return;
+    }
     setCacheBanner(`Reindexed. Version ${data.index_version}. Flushed ${data.flushed_keys} cache keys.`);
   }
 

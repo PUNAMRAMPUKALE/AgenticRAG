@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from app.infrastructure.aws import boto_client
-from app.infrastructure.retrieval.s3_events import parse_sqs_jobs
+from app.infrastructure.retrieval.s3_events import parse_reindex_command, parse_sqs_jobs
 from app.infrastructure.retrieval.s3_loader import S3CorpusLoader
 
 log = logging.getLogger(__name__)
@@ -111,9 +111,13 @@ class KnowledgeS3Pipeline:
         await self._delete(receipt)
 
     async def _apply_body(self, body: str) -> None:
+        actor = parse_reindex_command(body)
+        if actor is not None:
+            await self._knowledge.reindex(f"reindex:{actor}")
+            return
         jobs = parse_sqs_jobs(body)
         if not jobs:
-            raise ValueError("SQS message is not an S3 object event")
+            raise ValueError("SQS message is not an S3 object event or reindex command")
         expected_bucket = self._loader.bucket_name() if self._loader is not None else ""
         processed = 0
         for job in jobs:

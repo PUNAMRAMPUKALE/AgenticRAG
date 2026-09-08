@@ -52,7 +52,7 @@ class KnowledgeService:
             self.index = VespaSearchIndex(vector_store)
 
     def load(self) -> None:
-        self.chunks, self.index, self.index_version = self._loader.load()
+        raise RuntimeError("Search is Vespa-only. Do not load the corpus into the API process.")
 
     async def reindex(self, actor: str) -> ReindexResult:
         async with self._lock:
@@ -94,10 +94,7 @@ class KnowledgeService:
             self.last_reused_files = result.reused_files
             self.docs_indexed = result.docs_indexed
         else:
-            self.chunks, self.index, self.index_version = await asyncio.to_thread(self._loader.load)
-            self.last_changed_files = 0
-            self.last_reused_files = 0
-            self.docs_indexed = len(self.chunks)
+            raise RuntimeError("Knowledge ingest requires Vespa and a stamp-aware loader.")
         flushed = 0
         if self.last_changed_files or actor.startswith("reindex"):
             flushed = await self._cache.flush_answers()

@@ -40,11 +40,22 @@ class PostgresConversationRepository:
                 cursor.close()
 
     async def init_schema(self) -> None:
-        if self._settings.migrate_on_boot:
-            admin = self._settings.database_admin_url.strip() or self._settings.database_url
-            await asyncio.to_thread(run_alembic_upgrade, admin)
-        async with self.engine.begin() as conn:
-            await apply_rls(conn)
+        if not self._settings.migrate_on_boot:
+            return
+        admin = self._settings.database_admin_url.strip() or self._settings.database_url
+        await asyncio.to_thread(run_alembic_upgrade, admin)
+        if admin == self._settings.database_url:
+            async with self.engine.begin() as conn:
+                await apply_rls(conn)
+            return
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        admin_engine = create_async_engine(admin)
+        try:
+            async with admin_engine.begin() as conn:
+                await apply_rls(conn)
+        finally:
+            await admin_engine.dispose()
 
 
     async def ping(self) -> bool:
