@@ -3,6 +3,7 @@ backend/data/
 backend/knowledge/.s3-sync-etags.json
 frontend/node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
 .env
 *.pyc
 __pycache__/
