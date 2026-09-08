@@ -28,3 +28,8 @@ class IndexNotReady(AppError):
 class EmptyQuery(AppError):
     def __init__(self):
         super().__init__(400, "Empty query")
+
+
+class QueryRejected(AppError):
+    def __init__(self, detail: str = "Query was rejected by retrieval guardrails"):
+        super().__init__(400, detail)

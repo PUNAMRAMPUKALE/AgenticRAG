@@ -4,7 +4,9 @@ import asyncio
 import os
 from dataclasses import dataclass
 
+from app.core.errors import EmptyQuery, QueryRejected
 from app.domain.ports import SearchIndex
+from app.infrastructure.retrieval.guardrails import citation_snippet, guard_query
 
 
 @dataclass
@@ -13,7 +15,8 @@ class AgentDeps:
 
 
 def retrieve(index: SearchIndex, query: str, k: int = 4) -> tuple[str, list[dict]]:
-    hits = index.search(query, k=k)
+    guarded = guard_query(query, k=k)
+    hits = index.search(guarded.text, k=guarded.k)
     citations = [
         {
             "file_id": chunk.file_id,
@@ -22,7 +25,7 @@ def retrieve(index: SearchIndex, query: str, k: int = 4) -> tuple[str, list[dict
             "section": chunk.section,
             "page": chunk.page,
             "score": round(score, 3),
-            "snippet": chunk.text[:280],
+            "snippet": citation_snippet(chunk.text),
         }
         for chunk, score in hits
     ]
@@ -72,7 +75,10 @@ class KnowledgeAssistant:
         @agent.tool
         async def retrieve_relevant_documents(ctx: RunContext[AgentDeps], q: str) -> str:
             """Retrieve relevant document chunks from the Horizon Trust knowledge base."""
-            text, _ = await asyncio.to_thread(retrieve, ctx.deps.index, q)
+            try:
+                text, _ = await asyncio.to_thread(retrieve, ctx.deps.index, q)
+            except (EmptyQuery, QueryRejected):
+                text, _ = await asyncio.to_thread(retrieve, ctx.deps.index, query)
             return text
 
         result = await agent.run(query, deps=AgentDeps(index=index))

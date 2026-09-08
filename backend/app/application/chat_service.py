@@ -3,10 +3,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from app.core.errors import ConversationNotFound, EmptyQuery, IndexNotReady
+from app.core.errors import ConversationNotFound, IndexNotReady
 from app.domain.identity import Principal
 from app.domain.models import Message
 from app.domain.ports import AnswerCache, AnswerGenerator, ConversationRepository, SearchIndex
+from app.infrastructure.retrieval.guardrails import guard_query
 
 
 @dataclass
@@ -41,12 +42,12 @@ class ChatService:
         session_id: str | None,
         index: SearchIndex | None,
         index_version: str,
+        *,
+        retrieval_ready: bool = True,
     ) -> ChatResult:
-        if index is None:
+        if index is None or not retrieval_ready:
             raise IndexNotReady()
-        text = message.strip()
-        if not text:
-            raise EmptyQuery()
+        text = guard_query(message).text
 
         user_id = principal.subject
         manager = principal.is_manager

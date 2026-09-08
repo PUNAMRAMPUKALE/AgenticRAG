@@ -259,6 +259,9 @@ class KnowledgeService:
             "chunks": [chunk_record(c) for c in rows[offset : offset + limit]],
         }
 
+    def retrieval_ready(self) -> bool:
+        return self.live_chunk_count() > 0
+
     def live_chunk_count(self) -> int:
         if self._vector_store is not None:
             return self._vector_store.count_chunks()

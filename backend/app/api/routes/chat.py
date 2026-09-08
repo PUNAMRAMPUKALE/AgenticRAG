@@ -31,6 +31,7 @@ async def chat(
         session_id=body.session_id,
         index=container.knowledge.index,
         index_version=container.knowledge.index_version,
+        retrieval_ready=container.knowledge.retrieval_ready(),
     )
 
     async def events():

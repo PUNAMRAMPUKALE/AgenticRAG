@@ -200,6 +200,15 @@ export default function App() {
       setBusy(false);
       return;
     }
+    if (res.status === 400) {
+      const body = (await res.json().catch(() => ({}))) as { detail?: string };
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: body.detail || "That question could not be searched." },
+      ]);
+      setBusy(false);
+      return;
+    }
     if (res.status === 503) {
       const body = (await res.json().catch(() => ({}))) as { detail?: string };
       setMessages((m) => [

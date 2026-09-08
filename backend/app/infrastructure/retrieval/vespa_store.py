@@ -262,8 +262,10 @@ class VespaChunkStore:
     ) -> list[tuple[Chunk, float]]:
         """Live retrieval in Vespa (HNSW + BM25). Does not load the corpus into RAM."""
         from app.infrastructure.llm.embeddings import get_embedder
+        from app.infrastructure.retrieval.guardrails import sanitize_query
 
-        if not query.strip() or not self._base:
+        query = sanitize_query(query)
+        if not query or not self._base:
             return []
         embedder = get_embedder()
         tenant_id = _safe_token(tenant_id, "default")
