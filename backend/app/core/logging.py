@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections import deque
 from datetime import datetime, timezone
 
 from app.core.ingest_context import ingest_source_key, ingest_trace_id
+
+_LOG_RING: deque[dict] = deque(maxlen=800)
 
 
 class PipelineContextFilter(logging.Filter):
@@ -67,13 +70,39 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+class MemoryLogHandler(logging.Handler):
+    """Keep recent JSON log records for the Observability UI."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            payload = json.loads(self.format(record))
+        except Exception:
+            payload = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+            }
+        _LOG_RING.append(payload)
+
+
+def recent_logs(limit: int = 400) -> list[dict]:
+    rows = list(_LOG_RING)
+    return list(reversed(rows))[: max(1, min(limit, 800))]
+
+
 def configure_logging() -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonLogFormatter())
-    handler.addFilter(PipelineContextFilter())
+    formatter = JsonLogFormatter()
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(formatter)
+    stream.addFilter(PipelineContextFilter())
+    memory = MemoryLogHandler()
+    memory.setFormatter(formatter)
+    memory.addFilter(PipelineContextFilter())
     root = logging.getLogger()
     root.handlers.clear()
-    root.addHandler(handler)
+    root.addHandler(stream)
+    root.addHandler(memory)
     root.setLevel(logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)

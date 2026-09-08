@@ -5,7 +5,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 
-from app.core.ingest_context import ingest_source_key
+from app.core.ingest_context import ingest_source_key, ingest_tracker
 from app.domain.models import Chunk
 from app.infrastructure.llm.embeddings import get_embedder
 from app.infrastructure.retrieval.chunking import (
@@ -97,6 +97,15 @@ def ingest_bytes(relative_path: str, data: bytes) -> list[Chunk]:
             "strategy": plan.strategy,
         },
     )
+    tracker = ingest_tracker.get()
+    if tracker is not None:
+        tracker.emit(
+            "chunk_start",
+            source_key=relative_path,
+            suffix=suffix or "none",
+            strategy=plan.strategy,
+            detail=f"{len(data)} bytes plan={plan.strategy}",
+        )
     try:
         if suffix == ".pdf":
             parsed = _parse_pdf_pages(data)
@@ -129,6 +138,15 @@ def ingest_bytes(relative_path: str, data: bytes) -> list[Chunk]:
             relative_path,
             extra={"stage": "chunk_error", "suffix": suffix or "none"},
         )
+        tracker = ingest_tracker.get()
+        if tracker is not None:
+            tracker.emit(
+                "chunk_error",
+                status="error",
+                source_key=relative_path,
+                suffix=suffix or "none",
+                detail="chunking failed",
+            )
         raise
     else:
         sizes = [len(c.text) for c in chunks]
@@ -155,6 +173,21 @@ def ingest_bytes(relative_path: str, data: bytes) -> list[Chunk]:
                 "chunk_chars_max": max(sizes) if sizes else 0,
             },
         )
+        tracker = ingest_tracker.get()
+        if tracker is not None:
+            tracker.emit(
+                "chunk_ok",
+                source_key=relative_path,
+                chunks=len(chunks),
+                duration_ms=elapsed,
+                strategy=strategy,
+                suffix=suffix or "none",
+                pages=pages,
+                chunk_chars_min=min(sizes) if sizes else 0,
+                chunk_chars_avg=int(sum(sizes) / len(sizes)) if sizes else 0,
+                chunk_chars_max=max(sizes) if sizes else 0,
+                detail=f"strategy={strategy} pages={pages}",
+            )
         return chunks
     finally:
         ingest_source_key.reset(token)

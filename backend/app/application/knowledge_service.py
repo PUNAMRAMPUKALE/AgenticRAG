@@ -5,7 +5,8 @@ import logging
 import uuid
 from dataclasses import dataclass
 
-from app.core.ingest_context import ingest_source_key, ingest_trace_id
+from app.core.ingest_context import ingest_source_key, ingest_trace_id, ingest_tracker
+from app.core.logging import recent_logs
 from app.domain.knowledge import chunk_record
 from app.domain.models import Chunk
 from app.domain.ports import AnswerCache, KnowledgeLoader, SearchIndex
@@ -81,6 +82,7 @@ class KnowledgeService:
         trace_id = str(uuid.uuid4())
         self.tracker.start(trace_id, actor)
         trace_token = ingest_trace_id.set(trace_id)
+        tracker_token = ingest_tracker.set(self.tracker)
         log.info(
             "Ingest run start (%s)",
             actor,
@@ -174,6 +176,7 @@ class KnowledgeService:
                 )
             raise
         finally:
+            ingest_tracker.reset(tracker_token)
             ingest_trace_id.reset(trace_token)
 
     async def ingest_status(self) -> dict:
@@ -185,6 +188,21 @@ class KnowledgeService:
         payload["index_version"] = self.index_version
         payload["ingesting"] = self.ingesting
         payload["runs"] = runs
+        logs = recent_logs()
+        payload["logs"] = logs
+        log_errors = [row for row in logs if str(row.get("level", "")).upper() in {"ERROR", "CRITICAL"}]
+        payload["errors"] = payload.get("errors") or []
+        payload["errors"] = payload["errors"] + [
+            {
+                "ts": row.get("ts"),
+                "stage": row.get("stage") or "log",
+                "status": "error",
+                "source_key": row.get("source_key") or "",
+                "detail": row.get("msg") or "",
+                "trace_id": row.get("ingest_trace_id") or "",
+            }
+            for row in log_errors
+        ]
         return payload
 
     async def ingest_object(self, source_key: str, *, deleted: bool, actor: str) -> str:
@@ -196,6 +214,7 @@ class KnowledgeService:
             trace_id = str(uuid.uuid4())
             self.tracker.start(trace_id, actor)
             trace_token = ingest_trace_id.set(trace_id)
+            tracker_token = ingest_tracker.set(self.tracker)
             key_token = ingest_source_key.set(source_key)
             try:
                 treat_deleted = deleted
@@ -246,6 +265,7 @@ class KnowledgeService:
                 raise
             finally:
                 ingest_source_key.reset(key_token)
+                ingest_tracker.reset(tracker_token)
                 ingest_trace_id.reset(trace_token)
                 self.ingesting = False
 

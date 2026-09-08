@@ -57,7 +57,15 @@ async def ingest_status(
     principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
     container: AppContainer = Depends(get_container),
 ):
-    """Live ingest stages, recent file events, and Postgres ingest_runs."""
+    """Live ingest traces, per-document chunking, errors, and recent logs."""
+    return await container.knowledge.ingest_status()
+
+
+@router.get("/observability")
+async def observability(
+    principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
+    container: AppContainer = Depends(get_container),
+):
     return await container.knowledge.ingest_status()
 
 

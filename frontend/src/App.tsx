@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
 import { apiFetch, fetchMe, loadAuthConfig, signInWithGoogleIdToken, signOut as apiSignOut, type Me } from "./auth";
+import Observability, { type IngestStatus } from "./Observability";
 
 type Citation = {
   file_id: string;
@@ -31,63 +32,12 @@ const HINTS = [
   "Summarize the Q2 2026 liquidity risk report.",
 ];
 
-type IngestLive = {
-  active: boolean;
-  trace_id: string;
-  actor: string;
-  stage: string;
-  source_key: string;
-  files_total: number;
-  files_changed: number;
-  files_reused: number;
-  files_done: number;
-  files_failed: number;
-  last_error: string;
-  started_at: string;
-  updated_at: string;
-};
-
-type IngestEvent = {
-  ts: string;
-  trace_id: string;
-  stage: string;
-  status: string;
-  source_key: string;
-  detail: string;
-  chunks: number;
-  duration_ms: number;
-  files_done: number;
-  files_total: number;
-};
-
-type IngestRun = {
-  run_id: string;
-  started_at: string | null;
-  actor: string;
-  status: string;
-  files_rechunked: number;
-  files_reused: number;
-  chunks_indexed: number;
-  error_detail: string | null;
-  index_version: string;
-};
-
-type IngestStatus = {
-  live: IngestLive;
-  events: IngestEvent[];
-  docs_indexed: number;
-  index_version: string;
-  ingesting: boolean;
-  runs: IngestRun[];
-};
-
 type KnowledgeChunk = {
   file_id: string;
   text: string;
   strategy?: string;
   section?: string;
   page?: string;
-  title?: string;
 };
 
 function roleLabel(role: string): string {
@@ -114,6 +64,7 @@ export default function App() {
   const [chunkFile, setChunkFile] = useState("");
   const [chunkSample, setChunkSample] = useState<KnowledgeChunk[]>([]);
   const [fileOptions, setFileOptions] = useState<{ file_id: string; chunks: number }[]>([]);
+  const [page, setPage] = useState<"chat" | "obs">("chat");
   const listRef = useRef<HTMLDivElement>(null);
 
   const isManager = Boolean(me?.roles.includes("manager"));
@@ -169,7 +120,7 @@ export default function App() {
       }
     }
     void pollIngest();
-    const id = window.setInterval(() => void pollIngest(), 2000);
+    const id = window.setInterval(() => void pollIngest(), 1000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -466,9 +417,18 @@ export default function App() {
             <small>{me.roles.map(roleLabel).join(", ") || "no app roles"}</small>
           </span>
           {isManager ? (
-            <button className="ghost" type="button" onClick={() => void reindex()}>
-              Reindex
-            </button>
+            <>
+              <button
+                className="ghost"
+                type="button"
+                onClick={() => setPage((p) => (p === "obs" ? "chat" : "obs"))}
+              >
+                {page === "obs" ? "Chat" : "Observability"}
+              </button>
+              <button className="ghost" type="button" onClick={() => void reindex()}>
+                Reindex
+              </button>
+            </>
           ) : null}
           <button className="ghost" type="button" onClick={newChat}>
             New chat
@@ -480,6 +440,23 @@ export default function App() {
       </header>
       {indexBanner ? <div className="banner">{indexBanner}</div> : null}
       {cacheBanner ? <div className="banner">{cacheBanner}</div> : null}
+      {isManager && page === "obs" ? (
+        ingestStatus ? (
+          <Observability
+            status={ingestStatus}
+            chunkFile={chunkFile}
+            fileOptions={fileOptions}
+            chunkSample={chunkSample}
+            onChunkFile={setChunkFile}
+            onLoadChunks={(id) => void loadChunkSample(id)}
+          />
+        ) : (
+          <p className="obs-hint" style={{ padding: 20 }}>
+            Loading observability from GET /v1/ingest/status …
+          </p>
+        )
+      ) : null}
+      {page === "chat" ? (
       <div className="shell">
         <aside className="sidebar">
           <p className="sidebar-label">Your conversations</p>
@@ -498,82 +475,6 @@ export default function App() {
               </button>
             ))
           )}
-          {isManager && ingestStatus ? (
-            <div className="ingest-panel">
-              <p className="sidebar-label">Ingest pipeline</p>
-              <p className="ingest-live">
-                {ingestStatus.ingesting ? "running" : ingestStatus.live.stage || "idle"}
-                {ingestStatus.live.trace_id
-                  ? ` · ${ingestStatus.live.trace_id.slice(0, 8)}`
-                  : ""}
-              </p>
-              <p className="ingest-meta">
-                {ingestStatus.docs_indexed} chunks in Vespa
-                {ingestStatus.live.files_changed
-                  ? ` · ${ingestStatus.live.files_done}/${ingestStatus.live.files_changed} files`
-                  : ""}
-              </p>
-              {ingestStatus.live.source_key ? (
-                <p className="ingest-file">{ingestStatus.live.source_key}</p>
-              ) : null}
-              {ingestStatus.live.last_error ? (
-                <p className="ingest-error">{ingestStatus.live.last_error}</p>
-              ) : null}
-              <ol className="ingest-events">
-                {ingestStatus.events.slice(0, 40).map((ev, i) => (
-                  <li key={`${ev.ts}-${ev.stage}-${i}`} className={ev.status === "error" ? "err" : ""}>
-                    <span>{ev.stage}</span>
-                    {ev.source_key ? <em>{ev.source_key.split("/").pop()}</em> : null}
-                    {ev.chunks ? <em>{ev.chunks} chunks</em> : null}
-                    {ev.duration_ms ? <em>{ev.duration_ms}ms</em> : null}
-                  </li>
-                ))}
-              </ol>
-              {ingestStatus.runs.length > 0 ? (
-                <>
-                  <p className="sidebar-label">Recent runs</p>
-                  <ul className="ingest-runs">
-                    {ingestStatus.runs.slice(0, 8).map((run) => (
-                      <li key={run.run_id}>
-                        {run.status} · {run.chunks_indexed} chunks · rechunked {run.files_rechunked}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : null}
-              <p className="sidebar-label">Chunk samples</p>
-              <button className="ghost" type="button" onClick={() => void loadChunkSample(chunkFile)}>
-                Load chunks
-              </button>
-              {fileOptions.length > 0 ? (
-                <select
-                  className="ingest-select"
-                  value={chunkFile}
-                  onChange={(e) => {
-                    setChunkFile(e.target.value);
-                    void loadChunkSample(e.target.value);
-                  }}
-                >
-                  <option value="">All files</option>
-                  {fileOptions.map((f) => (
-                    <option key={f.file_id} value={f.file_id}>
-                      {f.file_id} ({f.chunks})
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              {chunkSample.map((c, i) => (
-                <div className="chunk-sample" key={`${c.file_id}-${i}`}>
-                  <strong>
-                    {c.file_id}
-                    {c.strategy ? ` · ${c.strategy}` : ""}
-                    {c.page ? ` · p.${c.page}` : ""}
-                  </strong>
-                  <pre>{c.text.slice(0, 420)}</pre>
-                </div>
-              ))}
-            </div>
-          ) : null}
         </aside>
         <div className="main">
           <div className="thread" ref={listRef}>
@@ -624,6 +525,7 @@ export default function App() {
           </form>
         </div>
       </div>
+      ) : null}
     </>
   );
 }
