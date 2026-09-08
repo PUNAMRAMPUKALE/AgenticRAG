@@ -64,4 +64,4 @@ def _session_event(result: ChatResult) -> dict:
 
 
 def _sse(payload: dict) -> str:
-    return f"data: {json.dumps(payload)}\n\n"
+    return f"data: {json.dumps(payload, default=str)}\n\n"

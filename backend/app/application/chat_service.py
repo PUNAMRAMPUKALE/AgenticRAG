@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -8,6 +10,8 @@ from app.domain.identity import Principal
 from app.domain.models import Message
 from app.domain.ports import AnswerCache, AnswerGenerator, ConversationRepository, SearchIndex
 from app.infrastructure.retrieval.guardrails import guard_query
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -90,7 +94,14 @@ class ChatService:
         await self._conversations.add_message(
             session_id, Message(role="user", content=text), user_id=user_id, is_manager=manager
         )
-        answer, citations, used_llm = await self._generator.generate(text, index)
+        try:
+            answer, citations, used_llm = await self._generator.generate(text, index)
+        except Exception:
+            from app.infrastructure.llm.assistant import extractive_answer, retrieve
+
+            log.exception("Answer generation failed; using extractive retrieval")
+            formatted, citations = await asyncio.to_thread(retrieve, index, text)
+            answer, used_llm = extractive_answer(formatted, citations), False
         await self._conversations.add_message(
             session_id,
             Message(role="assistant", content=answer, citations=citations),
