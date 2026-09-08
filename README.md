@@ -163,3 +163,5 @@ python -m unittest tests.test_eval_score
 Exit `0` if pass rate ≥ `min_pass_rate` (default 0.75), `1` if the suite fails, `2` if Vespa is empty or down. `--generate` uses the same chat generator as production (LLM when `LLM_API_KEY` is set).
 
 Managers can run the same suite from the Observability page or `POST /v1/evals` (`?generate=true` optional).
+
+If `LANGSMITH_API_KEY` is set, each run also creates dataset `agenticrag-gold` and an experiment on [LangSmith](https://smith.langchain.com). Org-scoped keys need `LANGSMITH_WORKSPACE_ID`. EU region: `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com`.

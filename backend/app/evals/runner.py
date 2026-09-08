@@ -65,4 +65,18 @@ async def run_evals(
         EVAL_RUNS.labels("ok" if report["ok"] else "fail").inc()
         span.set_attribute("eval.pass_rate", report["pass_rate"])
         span.set_attribute("eval.ok", report["ok"])
-    return report
+        from app.core.config import get_settings
+        from app.evals.langsmith_sync import langsmith_enabled, publish_experiment
+
+        settings = get_settings()
+        if langsmith_enabled(settings):
+            try:
+                report["langsmith"] = await publish_experiment(
+                    settings, cases=dataset["cases"], scores=scores, generate=generate
+                )
+            except Exception as exc:
+                log.exception("LangSmith experiment publish failed")
+                report["langsmith_error"] = str(exc)[:500]
+        else:
+            report["langsmith_error"] = "LANGSMITH_API_KEY is empty; experiment was not uploaded"
+        return report

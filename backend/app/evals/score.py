@@ -14,6 +14,7 @@ class CaseScore:
     cited_file_ids: list[str] = field(default_factory=list)
     missing_phrases: list[str] = field(default_factory=list)
     detail: str = ""
+    answer: str = ""
 
 
 def cited_ids(citations: list[dict]) -> list[str]:
@@ -57,6 +58,7 @@ def score_case(case: dict, *, citations: list[dict], answer: str) -> CaseScore:
             abstain=True,
             cited_file_ids=ids,
             detail="abstain ok" if answer_ok else "expected abstain; cited corpus or answered anyway",
+            answer=answer,
         )
     hit = retrieval_hit(expected, citations)
     missing = missing_phrases(phrases, answer)
@@ -72,6 +74,7 @@ def score_case(case: dict, *, citations: list[dict], answer: str) -> CaseScore:
         cited_file_ids=ids,
         missing_phrases=missing,
         detail="ok" if passed else "missed expected file and/or required phrases",
+        answer=answer,
     )
 
 

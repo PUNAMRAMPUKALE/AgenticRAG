@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = ""
     otel_exporter_otlp_headers: str = ""
     otel_console_spans: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "agenticrag"
+    langsmith_dataset: str = "agenticrag-gold"
+    langsmith_tracing: bool = True
+    langsmith_endpoint: str = ""
+    langsmith_workspace_id: str = ""
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

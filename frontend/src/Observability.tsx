@@ -85,6 +85,8 @@ export type EvalReport = {
   ok: boolean;
   generate?: boolean;
   vespa_chunks?: number;
+  langsmith?: { dataset?: string; url?: string; project?: string };
+  langsmith_error?: string;
   results: EvalCaseResult[];
 };
 
@@ -417,6 +419,15 @@ export default function Observability({
               {evalReport.pass_rate} (min {evalReport.min_pass_rate})
               {evalReport.vespa_chunks != null ? ` · ${evalReport.vespa_chunks} chunks` : ""}
             </p>
+            {evalReport.langsmith?.url ? (
+              <p>
+                <a href={evalReport.langsmith.url} target="_blank" rel="noreferrer">
+                  Open LangSmith experiment
+                </a>
+                {evalReport.langsmith.dataset ? ` · dataset ${evalReport.langsmith.dataset}` : ""}
+              </p>
+            ) : null}
+            {evalReport.langsmith_error ? <div className="obs-error">{evalReport.langsmith_error}</div> : null}
             <ul className="obs-log">
               {evalReport.results.map((row) => (
                 <li key={row.id} className={row.pass ? "" : "err"}>
