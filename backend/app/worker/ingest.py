@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 async def _run() -> None:
     settings = get_settings()
     container = await build_container(settings, run_ingest=True)
+    migrate = getattr(container.conversations, "migrate", None)
+    if migrate is not None and settings.migrate_on_boot:
+        await migrate()
     loop = asyncio.get_running_loop()
     try:
         if container.s3_pipeline is not None:

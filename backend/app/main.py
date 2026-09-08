@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
-from app.application.container import build_container
+from app.application.container import AppContainer, build_container
 from app.core.aws import load_optional_secrets
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -24,15 +25,30 @@ load_optional_secrets()
 get_settings.cache_clear()
 configure_logging()
 
+log = logging.getLogger(__name__)
+
+
+async def _migrate_in_background(container: AppContainer) -> None:
+    migrate = getattr(container.conversations, "migrate", None)
+    if migrate is None:
+        return
+    try:
+        await migrate()
+        log.info("Postgres schema migrate finished")
+    except Exception:
+        log.exception("Postgres schema migrate failed")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    container = await build_container(get_settings())
+    settings = get_settings()
+    container = await build_container(settings)
     app.state.container = container
+    if settings.migrate_on_boot:
+        asyncio.create_task(_migrate_in_background(container), name="alembic-migrate")
     if container.ingest_watcher is not None:
         container.ingest_watcher.start(asyncio.get_running_loop())
     if container.s3_pipeline is not None:
-        # Do not block login on first S3 ingest. Auth starts immediately; chunks fill in later.
         container.s3_pipeline.start(asyncio.get_running_loop())
     yield
     await container.aclose()

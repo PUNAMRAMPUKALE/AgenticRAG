@@ -40,6 +40,9 @@ class PostgresConversationRepository:
                 cursor.close()
 
     async def init_schema(self) -> None:
+        return
+
+    async def migrate(self) -> None:
         if not self._settings.migrate_on_boot:
             return
         admin = self._settings.database_admin_url.strip() or self._settings.database_url
