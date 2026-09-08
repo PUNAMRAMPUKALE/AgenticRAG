@@ -260,7 +260,10 @@ class KnowledgeService:
         }
 
     def retrieval_ready(self) -> bool:
-        return self.live_chunk_count() > 0
+        try:
+            return self.live_chunk_count() > 0
+        except Exception:
+            return False
 
     def live_chunk_count(self) -> int:
         if self._vector_store is not None:

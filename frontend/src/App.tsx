@@ -50,7 +50,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [cacheBanner, setCacheBanner] = useState<string | null>(null);
   const [redisOn, setRedisOn] = useState<boolean | null>(null);
-  const [indexing, setIndexing] = useState(false);
+  const [indexBanner, setIndexBanner] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const isManager = Boolean(me?.roles.includes("manager"));
@@ -96,9 +96,28 @@ export default function App() {
       try {
         const res = await fetch("/health", { signal: AbortSignal.timeout(5000) });
         if (!res.ok) return;
-        const data = (await res.json()) as { ingesting?: boolean; docs_indexed?: number };
+        const data = (await res.json()) as {
+          ingesting?: boolean;
+          docs_indexed?: number;
+          vespa?: boolean;
+          ingest_in_api?: boolean;
+        };
         if (!cancelled) {
-          setIndexing(Boolean(data.ingesting) || data.docs_indexed === 0);
+          if (data.ingesting) {
+            setIndexBanner("Indexing knowledge from S3. Chat works after chunks are in Vespa.");
+          } else if (data.vespa === false) {
+            setIndexBanner(
+              "Vespa search (port 8080) is down. Config 19071 can be up while 8080 stays empty until ingest deploys the app.",
+            );
+          } else if ((data.docs_indexed ?? 0) === 0) {
+            setIndexBanner(
+              data.ingest_in_api
+                ? "Vespa has no chunks yet. Wait for the ingest logs in uvicorn."
+                : "Vespa has no chunks. This API is not ingesting (INGEST_IN_API=false). Run python -m app.worker.ingest or set INGEST_IN_API=true and restart uvicorn.",
+            );
+          } else {
+            setIndexBanner(null);
+          }
         }
       } catch {
         /* API still starting */
@@ -300,12 +319,7 @@ export default function App() {
         <h1>Horizon Trust knowledge assistant</h1>
         <p>Sign in with Google. The API verifies the Google ID token and stores an httpOnly session.</p>
         {authError ? <p className="gate-error">{authError}</p> : null}
-        {indexing ? (
-          <p className="gate-hint">
-            Knowledge is indexing from S3 in the background. You can sign in now; chat answers
-            wait until indexing finishes.
-          </p>
-        ) : null}
+        {indexBanner ? <p className="gate-hint">{indexBanner}</p> : null}
         {clientId ? (
           <GoogleOAuthProvider clientId={clientId}>
             <GoogleLogin
@@ -355,9 +369,7 @@ export default function App() {
           </button>
         </div>
       </header>
-      {indexing ? (
-        <div className="banner">Indexing knowledge from S3 in the background. Chat will work when this finishes.</div>
-      ) : null}
+      {indexBanner ? <div className="banner">{indexBanner}</div> : null}
       {cacheBanner ? <div className="banner">{cacheBanner}</div> : null}
       <div className="shell">
         <aside className="sidebar">
