@@ -86,8 +86,8 @@ header {
   border: 1px solid var(--border);
   border-radius: 12px;
 }
-.gate h1 { font-size: 18px; margin: 0 0 8px; }
-.gate p { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.gate h1 { font-size: 18px; margin: 0 0 8px; color: var(--text); }
+.gate p { color: var(--text); font-size: 14px; line-height: 1.5; }
 .gate-error { color: #f07178 !important; }
 .gate-hint { font-size: 12px !important; }
 .gate .primary { margin-top: 8px; height: 40px; }

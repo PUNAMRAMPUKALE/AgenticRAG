@@ -455,77 +455,76 @@ export default function App() {
             Loading observability from GET /v1/ingest/status …
           </p>
         )
-      ) : null}
-      {page === "chat" ? (
-      <div className="shell">
-        <aside className="sidebar">
-          <p className="sidebar-label">Your conversations</p>
-          {conversations.length === 0 ? (
-            <p className="sidebar-empty">None yet. Send a message to create one.</p>
-          ) : (
-            conversations.map((c) => (
-              <button
-                type="button"
-                key={c.session_id}
-                className={c.session_id === sessionId ? "convo active" : "convo"}
-                onClick={() => void openConversation(c.session_id)}
-              >
-                <span>{c.title}</span>
-                <small>{c.message_count} messages</small>
+      ) : (
+        <div className="shell">
+          <aside className="sidebar">
+            <p className="sidebar-label">Your conversations</p>
+            {conversations.length === 0 ? (
+              <p className="sidebar-empty">None yet. Send a message to create one.</p>
+            ) : (
+              conversations.map((c) => (
+                <button
+                  type="button"
+                  key={c.session_id}
+                  className={c.session_id === sessionId ? "convo active" : "convo"}
+                  onClick={() => void openConversation(c.session_id)}
+                >
+                  <span>{c.title}</span>
+                  <small>{c.message_count} messages</small>
+                </button>
+              ))
+            )}
+          </aside>
+          <div className="main">
+            <div className="thread" ref={listRef}>
+              {messages.length === 0 ? (
+                <p style={{ color: "var(--muted)" }}>
+                  Ask about the Northstar knowledge corpus. S3 files are chunked in the background.
+                </p>
+              ) : null}
+              {messages.map((m, i) => (
+                <div className={`bubble ${m.role}`} key={i}>
+                  <div className="body">{m.content}</div>
+                  {m.citations && m.citations.length > 0 ? (
+                    <div className="cites">
+                      {m.citations.map((c) => (
+                        <div className="cite" key={c.file_id + c.snippet.slice(0, 12)}>
+                          <strong>{c.file_id}</strong> · {c.title} · {c.as_of}
+                          {c.section ? ` · ${c.section}` : ""} · score {c.score}
+                          <div>{c.snippet}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className="hints">
+              {HINTS.map((h) => (
+                <button key={h} type="button" disabled={busy} onClick={() => void send(h)}>
+                  {h}
+                </button>
+              ))}
+            </div>
+            <form className="composer" onSubmit={onSubmit}>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="Ask about redemption, fees, or liquidity…"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send(draft);
+                  }
+                }}
+              />
+              <button className="primary" type="submit" disabled={busy}>
+                {busy ? "…" : "Send"}
               </button>
-            ))
-          )}
-        </aside>
-        <div className="main">
-          <div className="thread" ref={listRef}>
-            {messages.length === 0 ? (
-              <p style={{ color: "var(--muted)" }}>
-                Ask about the Northstar knowledge corpus. S3 files are chunked in the background.
-              </p>
-            ) : null}
-            {messages.map((m, i) => (
-              <div className={`bubble ${m.role}`} key={i}>
-                <div className="body">{m.content}</div>
-                {m.citations && m.citations.length > 0 ? (
-                  <div className="cites">
-                    {m.citations.map((c) => (
-                      <div className="cite" key={c.file_id + c.snippet.slice(0, 12)}>
-                        <strong>{c.file_id}</strong> · {c.title} · {c.as_of}
-                        {c.section ? ` · ${c.section}` : ""} · score {c.score}
-                        <div>{c.snippet}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
+            </form>
           </div>
-          <div className="hints">
-            {HINTS.map((h) => (
-              <button key={h} type="button" disabled={busy} onClick={() => void send(h)}>
-                {h}
-              </button>
-            ))}
-          </div>
-          <form className="composer" onSubmit={onSubmit}>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Ask about redemption, fees, or liquidity…"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(draft);
-                }
-              }}
-            />
-            <button className="primary" type="submit" disabled={busy}>
-              {busy ? "…" : "Send"}
-            </button>
-          </form>
         </div>
-      </div>
-      ) : null}
+      )}
     </>
   );
 }
