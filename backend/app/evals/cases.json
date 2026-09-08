@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "min_pass_rate": 0.75,
+  "cases": [
+    {
+      "id": "kyc-onboarding",
+      "query": "What is the KYC client onboarding procedure?",
+      "expected_file_ids": ["KYC_Client_Onboarding"],
+      "must_contain": ["kyc"]
+    },
+    {
+      "id": "payment-sop",
+      "query": "What does the payment operations standard operating procedure cover at Horizon Trust?",
+      "expected_file_ids": ["Payment_Operations_SOP"],
+      "must_contain": ["payment"]
+    },
+    {
+      "id": "q2-liquidity",
+      "query": "Summarize the Q2 2026 liquidity risk report.",
+      "expected_file_ids": ["Liquidity_Risk_Report_Q2_2026"],
+      "must_contain": ["liquidity"]
+    },
+    {
+      "id": "service-runbook",
+      "query": "What does the service operations runbook cover?",
+      "expected_file_ids": ["Service_Operations_Runbook"],
+      "must_contain": ["operations"]
+    }
+  ]
+}

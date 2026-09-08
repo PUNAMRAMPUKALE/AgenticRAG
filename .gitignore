@@ -7,3 +7,4 @@ frontend/tsconfig.tsbuildinfo
 .env
 *.pyc
 __pycache__/
+backend/eval_report.json

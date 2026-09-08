@@ -8,9 +8,11 @@ from app.api.deps import get_container, require_any_role
 from app.application.container import AppContainer
 from app.core.errors import AppError
 from app.domain.identity import CHAT_ROLES, REINDEX_ROLES, Principal
+from app.evals.runner import run_evals
 from app.infrastructure.retrieval.ingest_queue import enqueue_full_reindex
 
 router = APIRouter(prefix="/v1", tags=["admin"])
+_eval_lock = asyncio.Lock()
 
 
 @router.post("/reindex")
@@ -79,3 +81,25 @@ async def knowledge_snapshot(
 ):
     """Inspect chunks stored in Vespa (paginated)."""
     return await container.knowledge.snapshot(file_id=file_id, offset=offset, limit=limit)
+
+
+@router.post("/evals")
+async def run_eval_suite(
+    generate: bool = Query(False),
+    principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
+    container: AppContainer = Depends(get_container),
+):
+    """Gold retrieval evals against live Vespa. generate=true also runs the chat generator."""
+    index = container.knowledge.index
+    if index is None:
+        raise AppError(503, "Search index is not ready")
+    if _eval_lock.locked():
+        raise AppError(409, "An eval run is already in progress")
+    async with _eval_lock:
+        report = await run_evals(index, generate=generate)
+        try:
+            report["vespa_chunks"] = container.knowledge.live_chunk_count()
+        except Exception:
+            report["vespa_chunks"] = 0
+        report["run_by"] = principal.username
+        return report

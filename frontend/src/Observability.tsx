@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { apiFetch } from "./auth";
 
 export type IngestLive = {
   active: boolean;
@@ -63,6 +64,30 @@ export type IngestDocument = {
   events: IngestEvent[];
 };
 
+export type EvalCaseResult = {
+  id: string;
+  query: string;
+  pass: boolean;
+  retrieval_hit: boolean;
+  answer_ok: boolean;
+  abstain: boolean;
+  cited_file_ids: string[];
+  missing_phrases: string[];
+  detail: string;
+};
+
+export type EvalReport = {
+  cases_total: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+  min_pass_rate: number;
+  ok: boolean;
+  generate?: boolean;
+  vespa_chunks?: number;
+  results: EvalCaseResult[];
+};
+
 export type LogRow = {
   ts?: string;
   level?: string;
@@ -119,6 +144,9 @@ export default function Observability({
   const [traceFilter, setTraceFilter] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState("");
+  const [evalBusy, setEvalBusy] = useState(false);
+  const [evalError, setEvalError] = useState("");
+  const [evalReport, setEvalReport] = useState<EvalReport | null>(null);
 
   const live = status.live;
   const documents = status.documents ?? [];
@@ -139,6 +167,31 @@ export default function Observability({
     if (errorsOnly) rows = rows.filter((row) => (row.level || "").toUpperCase() === "ERROR");
     return rows;
   }, [status.logs, traceFilter, selectedDoc, errorsOnly]);
+
+  async function runEvals(generate: boolean) {
+    setEvalBusy(true);
+    setEvalError("");
+    try {
+      const res = await apiFetch(`/v1/evals?generate=${generate ? "true" : "false"}`, { method: "POST" });
+      const body = await res.text();
+      if (!res.ok) {
+        let msg = body.slice(0, 400) || `Eval failed (${res.status})`;
+        try {
+          const parsed = JSON.parse(body) as { detail?: string };
+          if (parsed.detail) msg = parsed.detail;
+        } catch {
+          /* plain text */
+        }
+        setEvalError(msg);
+        return;
+      }
+      setEvalReport(JSON.parse(body) as EvalReport);
+    } catch (err) {
+      setEvalError(err instanceof Error ? err.message : "Eval request failed");
+    } finally {
+      setEvalBusy(false);
+    }
+  }
 
   return (
     <div className="obs">
@@ -344,6 +397,42 @@ export default function Observability({
           </ul>
         </section>
       ) : null}
+
+      <section>
+        <h2>Gold evals</h2>
+        <p className="obs-hint">Retrieval scoring against Vespa. Same suite as `python -m app.evals`.</p>
+        <div className="obs-filters">
+          <button type="button" disabled={evalBusy} onClick={() => void runEvals(false)}>
+            {evalBusy ? "Running…" : "Run retrieval evals"}
+          </button>
+          <button type="button" disabled={evalBusy} onClick={() => void runEvals(true)}>
+            Run with generator
+          </button>
+        </div>
+        {evalError ? <div className="obs-error">{evalError}</div> : null}
+        {evalReport ? (
+          <>
+            <p>
+              {evalReport.ok ? "PASS" : "FAIL"} · {evalReport.passed}/{evalReport.cases_total} · rate{" "}
+              {evalReport.pass_rate} (min {evalReport.min_pass_rate})
+              {evalReport.vespa_chunks != null ? ` · ${evalReport.vespa_chunks} chunks` : ""}
+            </p>
+            <ul className="obs-log">
+              {evalReport.results.map((row) => (
+                <li key={row.id} className={row.pass ? "" : "err"}>
+                  <b>{row.pass ? "pass" : "fail"}</b>
+                  <span>{row.id}</span>
+                  <em>
+                    {row.detail}
+                    {row.cited_file_ids.length ? ` · ${row.cited_file_ids.join(", ")}` : ""}
+                    {row.missing_phrases.length ? ` · missing ${row.missing_phrases.join(", ")}` : ""}
+                  </em>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </section>
     </div>
   );
 }

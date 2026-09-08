@@ -146,4 +146,20 @@ Jaeger UI: http://127.0.0.1:16686. Grafana: http://127.0.0.1:3000 (anonymous vie
 
 ## What is still later
 
-MCP, HITL, CI test suite, and a dedicated `agenticrag_app` DB password in every environment. Production refuses to boot without a Google domain, SQS ingest queue, `INGEST_IN_API=false`, and `MIGRATE_ON_BOOT=false`. Manager reindex enqueues to SQS.
+MCP, HITL, and a dedicated `agenticrag_app` DB password in every environment. Production refuses to boot without a Google domain, SQS ingest queue, `INGEST_IN_API=false`, and `MIGRATE_ON_BOOT=false`. Manager reindex enqueues to SQS.
+
+## Evals
+
+Gold cases live in `backend/app/evals/cases.json` (KYC, payment SOP, Q2 liquidity, service operations runbook). Scoring checks citation `file_id` and required phrases; no extra LLM-judge package.
+
+Vespa must already have chunks. From `backend/`:
+
+```bash
+python -m app.evals
+python -m app.evals --generate
+python -m unittest tests.test_eval_score
+```
+
+Exit `0` if pass rate ≥ `min_pass_rate` (default 0.75), `1` if the suite fails, `2` if Vespa is empty or down. `--generate` uses the same chat generator as production (LLM when `LLM_API_KEY` is set).
+
+Managers can run the same suite from the Observability page or `POST /v1/evals` (`?generate=true` optional).

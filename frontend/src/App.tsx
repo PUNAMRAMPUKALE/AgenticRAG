@@ -28,7 +28,7 @@ type ConvoSummary = {
 
 const HINTS = [
   "What is the KYC client onboarding procedure?",
-  "What does the payment operations SOP require?",
+  "What does the payment operations standard operating procedure cover at Horizon Trust?",
   "Summarize the Q2 2026 liquidity risk report.",
 ];
 

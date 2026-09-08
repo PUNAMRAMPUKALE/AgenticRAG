@@ -30,6 +30,8 @@ VESPA_SEARCH = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
 )
 VESPA_CHUNKS = Gauge("agenticrag_vespa_chunks", "Chunks currently in Vespa")
+EVAL_RUNS = Counter("agenticrag_eval_runs_total", "Gold eval suite runs", ["result"])
+EVAL_CASES = Counter("agenticrag_eval_cases_total", "Gold eval cases", ["result"])
 
 
 def render_metrics() -> tuple[bytes, str]:
