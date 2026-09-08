@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+import time
 from io import BytesIO
 from pathlib import Path
 
+from app.core.ingest_context import ingest_source_key
 from app.domain.models import Chunk
 from app.infrastructure.llm.embeddings import get_embedder
 from app.infrastructure.retrieval.chunking import (
@@ -16,6 +19,8 @@ from app.infrastructure.retrieval.chunking import (
 )
 from app.infrastructure.retrieval.cleaning import clean_cell, clean_prose, looks_like_signal
 from app.infrastructure.retrieval.semantic import semantic_pdf_units, semantic_section_units
+
+log = logging.getLogger(__name__)
 
 
 def _title_from_text(text: str, fallback: str) -> str:
@@ -72,29 +77,87 @@ def _parse_xlsx_sheets(data: bytes) -> list[tuple[str, list[str], list[list[str]
 
 def ingest_bytes(relative_path: str, data: bytes) -> list[Chunk]:
     """ETL: parse → clean → hybrid chunk. One document in, retrieval units out."""
+    token = ingest_source_key.set(relative_path)
+    started = time.perf_counter()
     suffix = Path(relative_path).suffix.lower()
     file_id = Path(relative_path).with_suffix("").as_posix()
     fallback_title = Path(relative_path).stem.replace("_", " ")
     plan = plan_for_suffix(suffix)
-
-    if suffix == ".pdf":
-        embedder = get_embedder()
-        if embedder:
-            return _chunk_pdf_semantic(file_id, fallback_title, _parse_pdf_pages(data), embedder)
-        return _chunk_pdf(file_id, fallback_title, _parse_pdf_pages(data), plan)
-    if suffix in {".xlsx", ".xlsm"}:
-        return _chunk_xlsx(file_id, fallback_title, _parse_xlsx_sheets(data), plan)
-    if suffix == ".jsonl":
-        text = clean_prose(data.decode("utf-8"))
-        return _chunk_jsonl(file_id, fallback_title, text, plan)
-    if suffix == ".md":
-        text = clean_prose(data.decode("utf-8"))
-        embedder = get_embedder()
-        if embedder:
-            return _chunk_markdown_semantic(file_id, fallback_title, text, embedder)
-        return _chunk_markdown(file_id, fallback_title, text, plan)
-    text = clean_prose(data.decode("utf-8"))
-    return _chunk_recursive(file_id, fallback_title, text, plan, doc_type="text")
+    pages = 0
+    log.info(
+        "Chunking start %s (%s, %s bytes, plan=%s)",
+        relative_path,
+        suffix or "none",
+        len(data),
+        plan.strategy,
+        extra={
+            "stage": "chunk_start",
+            "suffix": suffix or "none",
+            "bytes": len(data),
+            "strategy": plan.strategy,
+        },
+    )
+    try:
+        if suffix == ".pdf":
+            parsed = _parse_pdf_pages(data)
+            pages = len(parsed)
+            embedder = get_embedder()
+            chunks = (
+                _chunk_pdf_semantic(file_id, fallback_title, parsed, embedder)
+                if embedder
+                else _chunk_pdf(file_id, fallback_title, parsed, plan)
+            )
+        elif suffix in {".xlsx", ".xlsm"}:
+            chunks = _chunk_xlsx(file_id, fallback_title, _parse_xlsx_sheets(data), plan)
+        elif suffix == ".jsonl":
+            text = clean_prose(data.decode("utf-8"))
+            chunks = _chunk_jsonl(file_id, fallback_title, text, plan)
+        elif suffix == ".md":
+            text = clean_prose(data.decode("utf-8"))
+            embedder = get_embedder()
+            chunks = (
+                _chunk_markdown_semantic(file_id, fallback_title, text, embedder)
+                if embedder
+                else _chunk_markdown(file_id, fallback_title, text, plan)
+            )
+        else:
+            text = clean_prose(data.decode("utf-8"))
+            chunks = _chunk_recursive(file_id, fallback_title, text, plan, doc_type="text")
+    except Exception:
+        log.exception(
+            "Chunking failed %s",
+            relative_path,
+            extra={"stage": "chunk_error", "suffix": suffix or "none"},
+        )
+        raise
+    else:
+        sizes = [len(c.text) for c in chunks]
+        strategy = chunks[0].strategy if chunks else plan.strategy
+        elapsed = int((time.perf_counter() - started) * 1000)
+        log.info(
+            "Chunking done %s: %s chunks strategy=%s pages=%s chars min/avg/max=%s/%s/%s",
+            relative_path,
+            len(chunks),
+            strategy,
+            pages,
+            min(sizes) if sizes else 0,
+            int(sum(sizes) / len(sizes)) if sizes else 0,
+            max(sizes) if sizes else 0,
+            extra={
+                "stage": "chunk_ok",
+                "suffix": suffix or "none",
+                "strategy": strategy,
+                "chunks": len(chunks),
+                "pages": pages,
+                "duration_ms": elapsed,
+                "chunk_chars_min": min(sizes) if sizes else 0,
+                "chunk_chars_avg": int(sum(sizes) / len(sizes)) if sizes else 0,
+                "chunk_chars_max": max(sizes) if sizes else 0,
+            },
+        )
+        return chunks
+    finally:
+        ingest_source_key.reset(token)
 
 
 def _chunk_markdown_semantic(file_id: str, fallback: str, text: str, embedder) -> list[Chunk]:

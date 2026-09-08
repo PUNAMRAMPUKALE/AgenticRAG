@@ -23,7 +23,7 @@ body {
   min-height: 0;
 }
 .sidebar {
-  width: 240px;
+  width: 300px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   overflow: auto;
@@ -172,4 +172,71 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 999px;
   padding: 6px 10px;
   cursor: pointer;
+}
+
+.ingest-panel {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.ingest-live {
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+.ingest-meta,
+.ingest-file {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0 0 6px;
+  word-break: break-all;
+}
+.ingest-error {
+  font-size: 11px;
+  color: #f07178;
+  margin: 0 0 8px;
+}
+.ingest-events,
+.ingest-runs {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.ingest-events li,
+.ingest-runs li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.ingest-events li.err {
+  color: #f07178;
+}
+.ingest-events span {
+  color: var(--text);
+}
+.ingest-select {
+  width: 100%;
+  margin: 8px 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+}
+.chunk-sample {
+  margin: 8px 0;
+  font-size: 11px;
+}
+.chunk-sample pre {
+  white-space: pre-wrap;
+  margin: 4px 0 0;
+  color: var(--muted);
+  max-height: 140px;
+  overflow: auto;
 }

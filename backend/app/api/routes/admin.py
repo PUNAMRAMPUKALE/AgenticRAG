@@ -20,13 +20,16 @@ async def reindex(
 ):
     settings = container.settings
     queue_url = settings.knowledge_s3_queue_url.strip()
-    if queue_url:
-        await asyncio.to_thread(
-            enqueue_full_reindex,
-            queue_url,
-            principal.username,
-            settings.knowledge_s3_region.strip() or None,
-        )
+    if queue_url and not settings.ingest_in_api:
+        try:
+            await asyncio.to_thread(
+                enqueue_full_reindex,
+                queue_url,
+                principal.username,
+                settings.knowledge_s3_region.strip() or None,
+            )
+        except Exception as exc:
+            raise AppError(503, f"Could not queue reindex on SQS: {exc}") from exc
         return {
             "ok": True,
             "queued": True,
@@ -47,6 +50,15 @@ async def reindex(
         503,
         "Ingest runs in the worker. Set KNOWLEDGE_S3_QUEUE_URL or INGEST_IN_API=true for local single-process.",
     )
+
+
+@router.get("/ingest/status")
+async def ingest_status(
+    principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
+    container: AppContainer = Depends(get_container),
+):
+    """Live ingest stages, recent file events, and Postgres ingest_runs."""
+    return await container.knowledge.ingest_status()
 
 
 @router.get("/knowledge")

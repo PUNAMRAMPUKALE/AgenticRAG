@@ -31,6 +31,65 @@ const HINTS = [
   "Summarize the Q2 2026 liquidity risk report.",
 ];
 
+type IngestLive = {
+  active: boolean;
+  trace_id: string;
+  actor: string;
+  stage: string;
+  source_key: string;
+  files_total: number;
+  files_changed: number;
+  files_reused: number;
+  files_done: number;
+  files_failed: number;
+  last_error: string;
+  started_at: string;
+  updated_at: string;
+};
+
+type IngestEvent = {
+  ts: string;
+  trace_id: string;
+  stage: string;
+  status: string;
+  source_key: string;
+  detail: string;
+  chunks: number;
+  duration_ms: number;
+  files_done: number;
+  files_total: number;
+};
+
+type IngestRun = {
+  run_id: string;
+  started_at: string | null;
+  actor: string;
+  status: string;
+  files_rechunked: number;
+  files_reused: number;
+  chunks_indexed: number;
+  error_detail: string | null;
+  index_version: string;
+};
+
+type IngestStatus = {
+  live: IngestLive;
+  events: IngestEvent[];
+  docs_indexed: number;
+  index_version: string;
+  ingesting: boolean;
+  runs: IngestRun[];
+};
+
+type KnowledgeChunk = {
+  file_id: string;
+  text: string;
+  strategy?: string;
+  section?: string;
+  page?: string;
+  title?: string;
+};
+
 function roleLabel(role: string): string {
   if (role === "manager") return "manager (expert)";
   if (role === "senior_analyst") return "senior analyst";
@@ -51,6 +110,10 @@ export default function App() {
   const [cacheBanner, setCacheBanner] = useState<string | null>(null);
   const [redisOn, setRedisOn] = useState<boolean | null>(null);
   const [indexBanner, setIndexBanner] = useState<string | null>(null);
+  const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
+  const [chunkFile, setChunkFile] = useState("");
+  const [chunkSample, setChunkSample] = useState<KnowledgeChunk[]>([]);
+  const [fileOptions, setFileOptions] = useState<{ file_id: string; chunks: number }[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
 
   const isManager = Boolean(me?.roles.includes("manager"));
@@ -91,6 +154,41 @@ export default function App() {
   }, [loadConversations]);
 
   useEffect(() => {
+    if (!isManager) {
+      setIngestStatus(null);
+      return;
+    }
+    let cancelled = false;
+    async function pollIngest() {
+      try {
+        const res = await apiFetch("/v1/ingest/status");
+        if (!res.ok || cancelled) return;
+        setIngestStatus((await res.json()) as IngestStatus);
+      } catch {
+        /* API still starting */
+      }
+    }
+    void pollIngest();
+    const id = window.setInterval(() => void pollIngest(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [isManager]);
+
+  async function loadChunkSample(fileId: string) {
+    const q = fileId ? `?file_id=${encodeURIComponent(fileId)}&limit=8` : "?limit=8";
+    const res = await apiFetch(`/v1/knowledge${q}`);
+    if (!res.ok) return;
+    const data = (await res.json()) as {
+      files?: { file_id: string; chunks: number }[];
+      chunks?: KnowledgeChunk[];
+    };
+    setFileOptions(data.files ?? []);
+    setChunkSample(data.chunks ?? []);
+  }
+
+  useEffect(() => {
     let cancelled = false;
     async function pollHealth() {
       try {
@@ -101,10 +199,20 @@ export default function App() {
           docs_indexed?: number;
           vespa?: boolean;
           ingest_in_api?: boolean;
+          ingest_stage?: string;
+          ingest_source_key?: string;
+          ingest_files_done?: number;
+          ingest_files_total?: number;
         };
         if (!cancelled) {
           if (data.ingesting) {
-            setIndexBanner("Indexing knowledge from S3. Chat works after chunks are in Vespa.");
+            const file = data.ingest_source_key ? ` ${data.ingest_source_key}` : "";
+            const progress =
+              data.ingest_files_total && data.ingest_files_total > 0
+                ? ` (${data.ingest_files_done ?? 0}/${data.ingest_files_total})`
+                : "";
+            const stage = data.ingest_stage ? ` · ${data.ingest_stage}` : "";
+            setIndexBanner(`Indexing${file}${progress}${stage}. Chat works after chunks are in Vespa.`);
           } else if (data.vespa === false) {
             setIndexBanner(
               "Vespa search (port 8080) is down. Config 19071 can be up while 8080 stays empty until ingest deploys the app.",
@@ -166,7 +274,8 @@ export default function App() {
       return;
     }
     if (!res.ok) {
-      setCacheBanner(`Reindex failed (${res.status}).`);
+      const body = (await res.json().catch(() => ({}))) as { detail?: string };
+      setCacheBanner(body.detail || `Reindex failed (${res.status}).`);
       return;
     }
     const data = (await res.json()) as {
@@ -389,6 +498,82 @@ export default function App() {
               </button>
             ))
           )}
+          {isManager && ingestStatus ? (
+            <div className="ingest-panel">
+              <p className="sidebar-label">Ingest pipeline</p>
+              <p className="ingest-live">
+                {ingestStatus.ingesting ? "running" : ingestStatus.live.stage || "idle"}
+                {ingestStatus.live.trace_id
+                  ? ` · ${ingestStatus.live.trace_id.slice(0, 8)}`
+                  : ""}
+              </p>
+              <p className="ingest-meta">
+                {ingestStatus.docs_indexed} chunks in Vespa
+                {ingestStatus.live.files_changed
+                  ? ` · ${ingestStatus.live.files_done}/${ingestStatus.live.files_changed} files`
+                  : ""}
+              </p>
+              {ingestStatus.live.source_key ? (
+                <p className="ingest-file">{ingestStatus.live.source_key}</p>
+              ) : null}
+              {ingestStatus.live.last_error ? (
+                <p className="ingest-error">{ingestStatus.live.last_error}</p>
+              ) : null}
+              <ol className="ingest-events">
+                {ingestStatus.events.slice(0, 40).map((ev, i) => (
+                  <li key={`${ev.ts}-${ev.stage}-${i}`} className={ev.status === "error" ? "err" : ""}>
+                    <span>{ev.stage}</span>
+                    {ev.source_key ? <em>{ev.source_key.split("/").pop()}</em> : null}
+                    {ev.chunks ? <em>{ev.chunks} chunks</em> : null}
+                    {ev.duration_ms ? <em>{ev.duration_ms}ms</em> : null}
+                  </li>
+                ))}
+              </ol>
+              {ingestStatus.runs.length > 0 ? (
+                <>
+                  <p className="sidebar-label">Recent runs</p>
+                  <ul className="ingest-runs">
+                    {ingestStatus.runs.slice(0, 8).map((run) => (
+                      <li key={run.run_id}>
+                        {run.status} · {run.chunks_indexed} chunks · rechunked {run.files_rechunked}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+              <p className="sidebar-label">Chunk samples</p>
+              <button className="ghost" type="button" onClick={() => void loadChunkSample(chunkFile)}>
+                Load chunks
+              </button>
+              {fileOptions.length > 0 ? (
+                <select
+                  className="ingest-select"
+                  value={chunkFile}
+                  onChange={(e) => {
+                    setChunkFile(e.target.value);
+                    void loadChunkSample(e.target.value);
+                  }}
+                >
+                  <option value="">All files</option>
+                  {fileOptions.map((f) => (
+                    <option key={f.file_id} value={f.file_id}>
+                      {f.file_id} ({f.chunks})
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              {chunkSample.map((c, i) => (
+                <div className="chunk-sample" key={`${c.file_id}-${i}`}>
+                  <strong>
+                    {c.file_id}
+                    {c.strategy ? ` · ${c.strategy}` : ""}
+                    {c.page ? ` · p.${c.page}` : ""}
+                  </strong>
+                  <pre>{c.text.slice(0, 420)}</pre>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </aside>
         <div className="main">
           <div className="thread" ref={listRef}>

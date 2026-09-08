@@ -27,5 +27,9 @@ async def health(request: Request):
         files_rechunked=knowledge.last_changed_files,
         files_reused=knowledge.last_reused_files,
         ingest_watch=ingest_watch,
+        ingest_stage=knowledge.tracker.live.stage,
+        ingest_source_key=knowledge.tracker.live.source_key,
+        ingest_files_done=knowledge.tracker.live.files_done,
+        ingest_files_total=knowledge.tracker.live.files_changed or knowledge.tracker.live.files_total,
     )
     return asdict(status)

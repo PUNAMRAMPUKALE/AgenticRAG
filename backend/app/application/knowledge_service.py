@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 
+from app.core.ingest_context import ingest_source_key, ingest_trace_id
 from app.domain.knowledge import chunk_record
 from app.domain.models import Chunk
 from app.domain.ports import AnswerCache, KnowledgeLoader, SearchIndex
 from app.infrastructure.llm.embeddings import get_embedder
 from app.infrastructure.persistence.ingest_runs import IngestRunRepository
+from app.infrastructure.retrieval.ingest_tracker import IngestTracker
 from app.infrastructure.retrieval.incremental import stamp_fingerprint, sync_incremental, sync_one
 from app.infrastructure.retrieval.vespa_store import VespaChunkStore
 
@@ -46,6 +49,7 @@ class KnowledgeService:
         self.last_changed_files: int = 0
         self.last_reused_files: int = 0
         self.docs_indexed: int = 0
+        self.tracker = IngestTracker()
         if vector_store is not None:
             from app.infrastructure.retrieval.vespa_index import VespaSearchIndex
 
@@ -74,61 +78,114 @@ class KnowledgeService:
                 self.ingesting = False
 
     async def _rebuild(self, actor: str) -> ReindexResult:
-        if self._vector_store is not None and hasattr(self._loader, "list_stamps"):
-            remote = await asyncio.to_thread(self._loader.list_stamps)
-            fingerprint = stamp_fingerprint(remote)
-
-            async def fetch_bytes(source_key: str) -> bytes:
-                return await asyncio.to_thread(self._loader.read_bytes, source_key)
-
-            result = await sync_incremental(
-                self._vector_store,
-                remote=remote,
-                fingerprint=fingerprint,
-                fetch_bytes=fetch_bytes,
-            )
-            self.chunks = result.chunks
-            self.index = result.index
-            self.index_version = result.version
-            self.last_changed_files = result.changed_files
-            self.last_reused_files = result.reused_files
-            self.docs_indexed = result.docs_indexed
-        else:
-            raise RuntimeError("Knowledge ingest requires Vespa and a stamp-aware loader.")
-        flushed = 0
-        if self.last_changed_files or actor.startswith("reindex"):
-            flushed = await self._cache.flush_answers()
-        await self._cache.set_index_version(self.index_version)
-        if self._ingest_runs is not None:
-            model = ""
-            embedder = get_embedder()
-            if embedder:
-                model = embedder.model
-            await self._ingest_runs.record(
-                actor=actor,
-                status="succeeded",
-                knowledge_source=self._knowledge_source,
-                embedding_model=model,
-                index_version=self.index_version,
-                files_seen=self.last_changed_files + self.last_reused_files,
-                files_rechunked=self.last_changed_files,
-                files_reused=self.last_reused_files,
-                files_deleted=0,
-                chunks_indexed=self.docs_indexed,
-            )
+        trace_id = str(uuid.uuid4())
+        self.tracker.start(trace_id, actor)
+        trace_token = ingest_trace_id.set(trace_id)
         log.info(
-            "Knowledge ingest: %s chunks, version %s, flushed %s cache keys (%s)",
-            self.docs_indexed,
-            self.index_version,
-            flushed,
+            "Ingest run start (%s)",
             actor,
+            extra={"pipeline": "ingest", "stage": "run_start", "ingest_trace_id": trace_id, "actor": actor},
         )
-        return ReindexResult(
-            index_version=self.index_version,
-            docs_indexed=self.docs_indexed,
-            flushed_keys=flushed,
-            reindexed_by=actor,
-        )
+        try:
+            if self._vector_store is not None and hasattr(self._loader, "list_stamps"):
+                remote = await asyncio.to_thread(self._loader.list_stamps)
+                fingerprint = stamp_fingerprint(remote)
+
+                async def fetch_bytes(source_key: str) -> bytes:
+                    return await asyncio.to_thread(self._loader.read_bytes, source_key)
+
+                result = await sync_incremental(
+                    self._vector_store,
+                    remote=remote,
+                    fingerprint=fingerprint,
+                    fetch_bytes=fetch_bytes,
+                    tracker=self.tracker,
+                )
+                self.chunks = result.chunks
+                self.index = result.index
+                self.index_version = result.version
+                self.last_changed_files = result.changed_files
+                self.last_reused_files = result.reused_files
+                self.docs_indexed = result.docs_indexed
+            else:
+                raise RuntimeError("Knowledge ingest requires Vespa and a stamp-aware loader.")
+            flushed = 0
+            if self.last_changed_files or actor.startswith("reindex"):
+                flushed = await self._cache.flush_answers()
+            await self._cache.set_index_version(self.index_version)
+            if self._ingest_runs is not None:
+                model = ""
+                embedder = get_embedder()
+                if embedder:
+                    model = embedder.model
+                await self._ingest_runs.record(
+                    actor=actor,
+                    status="succeeded",
+                    knowledge_source=self._knowledge_source,
+                    embedding_model=model,
+                    index_version=self.index_version,
+                    files_seen=self.last_changed_files + self.last_reused_files,
+                    files_rechunked=self.last_changed_files,
+                    files_reused=self.last_reused_files,
+                    files_deleted=0,
+                    chunks_indexed=self.docs_indexed,
+                )
+            log.info(
+                "Knowledge ingest: %s chunks, version %s, flushed %s cache keys (%s)",
+                self.docs_indexed,
+                self.index_version,
+                flushed,
+                actor,
+                extra={
+                    "pipeline": "ingest",
+                    "stage": "run_ok",
+                    "ingest_trace_id": trace_id,
+                    "chunks": self.docs_indexed,
+                    "actor": actor,
+                },
+            )
+            self.tracker.finish(ok=True, detail=f"chunks={self.docs_indexed}")
+            return ReindexResult(
+                index_version=self.index_version,
+                docs_indexed=self.docs_indexed,
+                flushed_keys=flushed,
+                reindexed_by=actor,
+            )
+        except Exception as exc:
+            self.tracker.finish(ok=False, detail=str(exc)[:2000])
+            log.exception(
+                "Ingest run failed (%s)",
+                actor,
+                extra={"pipeline": "ingest", "stage": "run_error", "ingest_trace_id": trace_id, "actor": actor},
+            )
+            if self._ingest_runs is not None:
+                await self._ingest_runs.record(
+                    actor=actor,
+                    status="failed",
+                    knowledge_source=self._knowledge_source,
+                    embedding_model="",
+                    index_version=self.index_version,
+                    files_seen=0,
+                    files_rechunked=0,
+                    files_reused=0,
+                    files_deleted=0,
+                    chunks_indexed=self.docs_indexed,
+                    error_detail=str(exc)[:2000],
+                )
+            raise
+        finally:
+            ingest_trace_id.reset(trace_token)
+
+    async def ingest_status(self) -> dict:
+        runs = []
+        if self._ingest_runs is not None:
+            runs = await self._ingest_runs.list_recent()
+        payload = self.tracker.snapshot()
+        payload["docs_indexed"] = self.live_chunk_count()
+        payload["index_version"] = self.index_version
+        payload["ingesting"] = self.ingesting
+        payload["runs"] = runs
+        return payload
 
     async def ingest_object(self, source_key: str, *, deleted: bool, actor: str) -> str:
         """Process one S3 object. Returns changed, reused, deleted, or empty."""
@@ -136,6 +193,10 @@ class KnowledgeService:
             raise RuntimeError("Per-object ingest requires Vespa and an S3 loader.")
         async with self._lock:
             self.ingesting = True
+            trace_id = str(uuid.uuid4())
+            self.tracker.start(trace_id, actor)
+            trace_token = ingest_trace_id.set(trace_id)
+            key_token = ingest_source_key.set(source_key)
             try:
                 treat_deleted = deleted
                 etag = ""
@@ -151,6 +212,7 @@ class KnowledgeService:
                     etag=etag,
                     fetch_bytes=self._fetch_bytes,
                     deleted=treat_deleted,
+                    tracker=self.tracker,
                 )
                 files_deleted = 1 if treat_deleted else 0
                 files_rechunked = 1 if outcome in {"changed", "empty"} else 0
@@ -163,8 +225,10 @@ class KnowledgeService:
                     files_rechunked=files_rechunked,
                     files_reused=files_reused,
                 )
+                self.tracker.finish(ok=True, detail=outcome)
                 return outcome
             except Exception as exc:
+                self.tracker.finish(ok=False, detail=str(exc)[:2000])
                 if self._ingest_runs is not None:
                     await self._ingest_runs.record(
                         actor=actor,
@@ -181,6 +245,8 @@ class KnowledgeService:
                     )
                 raise
             finally:
+                ingest_source_key.reset(key_token)
+                ingest_trace_id.reset(trace_token)
                 self.ingesting = False
 
     async def _fetch_bytes(self, source_key: str) -> bytes:
@@ -234,6 +300,13 @@ class KnowledgeService:
             files_rechunked,
             files_reused,
             flushed,
+            extra={
+                "pipeline": "ingest",
+                "stage": "object_ok",
+                "source_key": source_key,
+                "outcome": outcome,
+                "actor": actor,
+            },
         )
 
     async def snapshot(self, *, file_id: str | None = None, offset: int = 0, limit: int = 50) -> dict:

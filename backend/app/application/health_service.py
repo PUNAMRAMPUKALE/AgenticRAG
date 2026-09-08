@@ -29,6 +29,10 @@ class HealthStatus:
     files_reused: int
     ingest_in_api: bool
     ingest_queue: bool
+    ingest_stage: str
+    ingest_source_key: str
+    ingest_files_done: int
+    ingest_files_total: int
 
 
 class HealthService:
@@ -54,6 +58,10 @@ class HealthService:
         files_rechunked: int = 0,
         files_reused: int = 0,
         ingest_watch: bool = False,
+        ingest_stage: str = "idle",
+        ingest_source_key: str = "",
+        ingest_files_done: int = 0,
+        ingest_files_total: int = 0,
     ) -> HealthStatus:
         pg_ok = await self._conversations.ping()
         google_ok = self._identity.ready
@@ -86,4 +94,8 @@ class HealthService:
             files_reused=files_reused,
             ingest_in_api=self._settings.ingest_in_api,
             ingest_queue=bool(self._settings.knowledge_s3_queue_url.strip()),
+            ingest_stage=ingest_stage,
+            ingest_source_key=ingest_source_key,
+            ingest_files_done=ingest_files_done,
+            ingest_files_total=ingest_files_total,
         )

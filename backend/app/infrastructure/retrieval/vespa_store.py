@@ -73,7 +73,7 @@ class VespaChunkStore:
         for attempt in range(45):
             if await self.ping():
                 return
-            log.info("Waiting for Vespa query port 8080 after deploy (%s/45)", attempt + 1)
+            log.info("Waiting for Vespa query port 8080 after deploy (%s/45)", attempt + 1, extra={"pipeline": "ingest", "stage": "vespa_wait_8080"})
             await asyncio.sleep(2)
         raise RuntimeError(
             "Vespa config is up but query port 8080 did not come up. Check docker logs for vespa."
@@ -98,7 +98,7 @@ class VespaChunkStore:
             if response.status_code >= 400:
                 log.warning("Vespa deploy HTTP %s: %s", response.status_code, response.text[:500])
             else:
-                log.info("Vespa application deployed")
+                log.info("Vespa application deployed", extra={"pipeline": "ingest", "stage": "vespa_deploy"})
         except httpx.HTTPError:
             log.warning("Vespa config server not reachable at %s", self._config, exc_info=True)
 
