@@ -282,53 +282,63 @@ class VespaChunkStore:
         query = sanitize_query(query)
         if not query or not self._base:
             return []
-        embedder = get_embedder()
-        tenant_id = _safe_token(tenant_id, "default")
-        corpus_id = _safe_token(corpus_id, "horizon_trust")
-        classification = _safe_token(classification, "internal")
-        k = max(1, min(int(k), 20))
-        yql = (
-            "select * from knowledge_chunk where "
-            f'tenant_id contains "{tenant_id}" and corpus_id contains "{corpus_id}" '
-            f'and classification contains "{classification}" and '
-            f"(userQuery() or ({{targetHits:{k}}}nearestNeighbor(embedding, q_emb)))"
-        )
-        body: dict = {
-            "yql": yql,
-            "query": query,
-            "hits": k,
-            "ranking": "hybrid",
-            "timeout": "5s",
-        }
-        if embedder:
-            vector = embedder.embed([query])
-            if vector.size:
-                body["input.query(q_emb)"] = {"values": [float(x) for x in vector[0].tolist()]}
-        try:
-            with httpx.Client(timeout=15.0) as client:
-                response = client.post(f"{self._base}/search/", json=body)
-        except httpx.HTTPError:
-            log.exception("Vespa search failed")
-            return []
-        if response.status_code >= 400:
-            log.warning("Vespa search HTTP %s: %s", response.status_code, response.text[:400])
-            return []
-        hits: list[tuple[Chunk, float]] = []
-        for hit in (response.json().get("root") or {}).get("children") or []:
-            fields = hit.get("fields") or {}
-            chunk = Chunk(
-                chunk_id=str(fields.get("chunk_id") or ""),
-                file_id=str(fields.get("file_id") or ""),
-                title=str(fields.get("title") or ""),
-                text=str(fields.get("text") or ""),
-                as_of=str(fields.get("as_of") or ""),
-                section=str(fields.get("section") or ""),
-                page=str(fields.get("page") or ""),
-                doc_type=str(fields.get("doc_type") or ""),
-                strategy=str(fields.get("strategy") or ""),
-            )
-            hits.append((chunk, float(hit.get("relevance") or 0)))
-        return hits
+        from app.core.metrics import VESPA_SEARCH
+        from app.core.telemetry import get_tracer
+
+        started = time.perf_counter()
+        with get_tracer().start_as_current_span("vespa.search") as span:
+            span.set_attribute("vespa.k", k)
+            try:
+                embedder = get_embedder()
+                tenant_id = _safe_token(tenant_id, "default")
+                corpus_id = _safe_token(corpus_id, "horizon_trust")
+                classification = _safe_token(classification, "internal")
+                k = max(1, min(int(k), 20))
+                yql = (
+                    "select * from knowledge_chunk where "
+                    f'tenant_id contains "{tenant_id}" and corpus_id contains "{corpus_id}" '
+                    f'and classification contains "{classification}" and '
+                    f"(userQuery() or ({{targetHits:{k}}}nearestNeighbor(embedding, q_emb)))"
+                )
+                body: dict = {
+                    "yql": yql,
+                    "query": query,
+                    "hits": k,
+                    "ranking": "hybrid",
+                    "timeout": "5s",
+                }
+                if embedder:
+                    vector = embedder.embed([query])
+                    if vector.size:
+                        body["input.query(q_emb)"] = {"values": [float(x) for x in vector[0].tolist()]}
+                try:
+                    with httpx.Client(timeout=15.0) as client:
+                        response = client.post(f"{self._base}/search/", json=body)
+                except httpx.HTTPError:
+                    log.exception("Vespa search failed")
+                    return []
+                if response.status_code >= 400:
+                    log.warning("Vespa search HTTP %s: %s", response.status_code, response.text[:400])
+                    return []
+                hits: list[tuple[Chunk, float]] = []
+                for hit in (response.json().get("root") or {}).get("children") or []:
+                    fields = hit.get("fields") or {}
+                    chunk = Chunk(
+                        chunk_id=str(fields.get("chunk_id") or ""),
+                        file_id=str(fields.get("file_id") or ""),
+                        title=str(fields.get("title") or ""),
+                        text=str(fields.get("text") or ""),
+                        as_of=str(fields.get("as_of") or ""),
+                        section=str(fields.get("section") or ""),
+                        page=str(fields.get("page") or ""),
+                        doc_type=str(fields.get("doc_type") or ""),
+                        strategy=str(fields.get("strategy") or ""),
+                    )
+                    hits.append((chunk, float(hit.get("relevance") or 0)))
+                span.set_attribute("vespa.hits", len(hits))
+                return hits
+            finally:
+                VESPA_SEARCH.observe(time.perf_counter() - started)
 
     def count_chunks(self) -> int:
         if not self._base:

@@ -48,12 +48,16 @@ def extractive_answer(formatted: str, citations: list[dict]) -> str:
 
 class KnowledgeAssistant:
     async def generate(self, query: str, index: SearchIndex) -> tuple[str, list[dict], bool]:
-        formatted, citations = await asyncio.to_thread(retrieve, index, query)
+        from app.core.telemetry import get_tracer
+
+        with get_tracer().start_as_current_span("chat.retrieve"):
+            formatted, citations = await asyncio.to_thread(retrieve, index, query)
         api_key = os.getenv("LLM_API_KEY", "").strip()
         if not api_key:
             return extractive_answer(formatted, citations), citations, False
         try:
-            answer = await self._run_llm(query, index, api_key)
+            with get_tracer().start_as_current_span("chat.llm"):
+                answer = await self._run_llm(query, index, api_key)
         except Exception:
             log.exception("LLM generate failed; using extractive answer")
             return extractive_answer(formatted, citations), citations, False

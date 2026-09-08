@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 
 from app.core.errors import ConversationNotFound, IndexNotReady
+from app.core.metrics import CHAT_REQUESTS
+from app.core.telemetry import get_tracer, record_exception
 from app.domain.identity import Principal
 from app.domain.models import Message
 from app.domain.ports import AnswerCache, AnswerGenerator, ConversationRepository, SearchIndex
@@ -52,7 +54,29 @@ class ChatService:
         if index is None or not retrieval_ready:
             raise IndexNotReady()
         text = guard_query(message).text
+        with get_tracer().start_as_current_span("chat.ask") as span:
+            span.set_attribute("chat.new_conversation", not bool(session_id))
+            try:
+                result = await self._ask_body(
+                    principal, text, session_id, index, index_version
+                )
+                CHAT_REQUESTS.labels("cache_hit" if result.cache_hit else "ok").inc()
+                span.set_attribute("chat.cache_hit", result.cache_hit)
+                span.set_attribute("chat.used_llm", result.used_llm)
+                return result
+            except Exception as exc:
+                CHAT_REQUESTS.labels("error").inc()
+                record_exception(exc)
+                raise
 
+    async def _ask_body(
+        self,
+        principal: Principal,
+        text: str,
+        session_id: str | None,
+        index: SearchIndex,
+        index_version: str,
+    ) -> ChatResult:
         user_id = principal.subject
         manager = principal.is_manager
         new_conversation = not session_id

@@ -121,9 +121,28 @@ AWS_DEFAULT_REGION=us-east-2
 # Prefer an IAM role in production. Access keys are for local/dev only.
 LLM_API_KEY=
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OTEL_SERVICE_NAME=agenticrag
+OTEL_EXPORTER_OTLP_ENDPOINT=https://your-collector:4318
 ```
 
 Add your production HTTPS origin to the Google OAuth client. Serve UI and API on the same site so the session cookie is first-party.
+
+## Observability (production)
+
+JSON logs on stdout include `trace_id`, `span_id`, `ingest_trace_id`, `source_key`, and ingest stages. Ship them with your platform’s log agent.
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP HTTP collector (Grafana Tempo, Jaeger, Honeycomb, Datadog). The API and ingest worker export spans for HTTP, ingest files, Vespa search, retrieval, and LLM. Production without an endpoint logs a warning and still boots. Optional `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer ...`.
+
+Prometheus scrapes `GET /metrics` (`agenticrag_*`). Keep that path on a private network; it is unauthenticated. `/health` reports `otel_exporting` and `otel_service_name`. Managers see the same flags on the Observability page.
+
+Local collector + dashboards (API still runs on the host at port 8000):
+
+```bash
+docker compose --profile obs up -d
+# .env: OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+```
+
+Jaeger UI: http://127.0.0.1:16686. Grafana: http://127.0.0.1:3000 (anonymous viewer, or admin/admin). Prometheus: http://127.0.0.1:9090.
 
 ## What is still later
 

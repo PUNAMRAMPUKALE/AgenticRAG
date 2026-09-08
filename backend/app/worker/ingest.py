@@ -46,6 +46,9 @@ def main() -> None:
     load_optional_secrets()
     get_settings.cache_clear()
     configure_logging()
+    from app.core.telemetry import setup_telemetry
+
+    setup_telemetry(get_settings())
     asyncio.run(_run())
 
 

@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
+from app.core.telemetry import instrument_app, setup_telemetry
 
 _root = Path(__file__).resolve().parents[2]
 load_dotenv(_root / ".env", override=True)
@@ -24,6 +25,7 @@ load_dotenv(override=True)
 load_optional_secrets()
 get_settings.cache_clear()
 configure_logging()
+setup_telemetry(get_settings())
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +78,7 @@ def create_app() -> FastAPI:
         return JSONResponse({"detail": str(exc)[:500] or "Internal Server Error"}, status_code=500)
 
     application.include_router(api_router)
+    instrument_app(application)
     return application
 
 

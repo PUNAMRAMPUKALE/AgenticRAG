@@ -7,6 +7,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from app.core.ingest_context import ingest_source_key, ingest_trace_id
+from app.core.telemetry import current_trace_ids
 
 _LOG_RING: deque[dict] = deque(maxlen=800)
 
@@ -23,6 +24,11 @@ class PipelineContextFilter(logging.Filter):
         key = ingest_source_key.get()
         if key and not getattr(record, "source_key", None):
             record.source_key = key
+        trace_id, span_id = current_trace_ids()
+        if trace_id and not getattr(record, "trace_id", None):
+            record.trace_id = trace_id
+        if span_id and not getattr(record, "span_id", None):
+            record.span_id = span_id
         return True
 
 
@@ -52,6 +58,8 @@ class JsonLogFormatter(logging.Formatter):
         "chunk_chars_min",
         "chunk_chars_avg",
         "chunk_chars_max",
+        "trace_id",
+        "span_id",
     )
 
     def format(self, record: logging.LogRecord) -> str:

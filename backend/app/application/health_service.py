@@ -33,6 +33,8 @@ class HealthStatus:
     ingest_source_key: str
     ingest_files_done: int
     ingest_files_total: int
+    otel_exporting: bool
+    otel_service_name: str
 
 
 class HealthService:
@@ -98,4 +100,6 @@ class HealthService:
             ingest_source_key=ingest_source_key,
             ingest_files_done=ingest_files_done,
             ingest_files_total=ingest_files_total,
+            otel_exporting=bool(self._settings.otel_exporter_otlp_endpoint.strip()),
+            otel_service_name=self._settings.otel_service_name.strip() or "agenticrag",
         )

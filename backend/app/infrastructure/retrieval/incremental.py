@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.core.ingest_context import ingest_source_key
+from app.core.metrics import INGEST_CHUNKS, INGEST_FILES
+from app.core.telemetry import get_tracer
 from app.infrastructure.llm.embeddings import get_embedder
 from app.infrastructure.retrieval.ingest import ingest_bytes
 from app.infrastructure.retrieval.ingest_tracker import IngestTracker
@@ -101,81 +103,94 @@ async def sync_incremental(
     for i, key in enumerate(changed, start=1):
         started = time.perf_counter()
         key_token = ingest_source_key.set(key)
-        if tracker:
-            tracker.emit("file_start", source_key=key, files_done=i - 1, files_total=len(changed))
-        log.info(
-            "Ingest file start %s (%s/%s)",
-            key,
-            i,
-            len(changed),
-            extra={"pipeline": "ingest", "stage": "file_start", "source_key": key, "files_done": i - 1},
-        )
-        try:
+        with get_tracer().start_as_current_span("ingest.file") as span:
+            span.set_attribute("ingest.source_key", key)
+            if tracker:
+                tracker.emit("file_start", source_key=key, files_done=i - 1, files_total=len(changed))
+            log.info(
+                "Ingest file start %s (%s/%s)",
+                key,
+                i,
+                len(changed),
+                extra={"pipeline": "ingest", "stage": "file_start", "source_key": key, "files_done": i - 1},
+            )
             try:
-                data = await fetch_bytes(key)
-                chunks = await asyncio.to_thread(ingest_bytes, key, data)
-            except Exception as exc:
-                failed += 1
+                try:
+                    data = await fetch_bytes(key)
+                    chunks = await asyncio.to_thread(ingest_bytes, key, data)
+                except Exception as exc:
+                    failed += 1
+                    elapsed = int((time.perf_counter() - started) * 1000)
+                    INGEST_FILES.labels("error").inc()
+                    log.exception(
+                        "Failed to ingest %s",
+                        key,
+                        extra={"pipeline": "ingest", "stage": "file_error", "source_key": key, "status": "error"},
+                    )
+                    if tracker:
+                        tracker.emit(
+                            "file_error",
+                            status="error",
+                            source_key=key,
+                            detail=str(exc)[:2000],
+                            duration_ms=elapsed,
+                            files_done=i,
+                            files_failed=failed,
+                            files_total=len(changed),
+                        )
+                    continue
+                if not chunks:
+                    INGEST_FILES.labels("empty").inc()
+                    log.warning(
+                        "No usable chunks from %s",
+                        key,
+                        extra={"pipeline": "ingest", "stage": "file_empty", "source_key": key},
+                    )
+                    await store.replace_source(key, remote[key], model, [], np.zeros((0, 0), dtype=np.float32))
+                    if tracker:
+                        tracker.emit("file_empty", source_key=key, files_done=i, files_total=len(changed))
+                    continue
+                if tracker:
+                    tracker.emit(
+                        "embed_start",
+                        source_key=key,
+                        chunks=len(chunks),
+                        files_done=i - 1,
+                        files_total=len(changed),
+                    )
+                if embedder:
+                    vectors = await asyncio.to_thread(embedder.embed, [c.text for c in chunks])
+                else:
+                    vectors = np.zeros((0, 0), dtype=np.float32)
+                await store.replace_source(key, remote[key], model, chunks, vectors)
                 elapsed = int((time.perf_counter() - started) * 1000)
-                log.exception(
-                    "Failed to ingest %s",
+                INGEST_FILES.labels("ok").inc()
+                INGEST_CHUNKS.inc(len(chunks))
+                span.set_attribute("ingest.chunks", len(chunks))
+                log.info(
+                    "Re-chunked and stored %s (%s chunks)",
                     key,
-                    extra={"pipeline": "ingest", "stage": "file_error", "source_key": key, "status": "error"},
+                    len(chunks),
+                    extra={
+                        "pipeline": "ingest",
+                        "stage": "file_ok",
+                        "source_key": key,
+                        "chunks": len(chunks),
+                        "duration_ms": elapsed,
+                        "files_done": i,
+                    },
                 )
                 if tracker:
                     tracker.emit(
-                        "file_error",
-                        status="error",
+                        "file_ok",
                         source_key=key,
-                        detail=str(exc)[:2000],
+                        chunks=len(chunks),
                         duration_ms=elapsed,
                         files_done=i,
-                        files_failed=failed,
                         files_total=len(changed),
                     )
-                continue
-            if not chunks:
-                log.warning(
-                    "No usable chunks from %s",
-                    key,
-                    extra={"pipeline": "ingest", "stage": "file_empty", "source_key": key},
-                )
-                await store.replace_source(key, remote[key], model, [], np.zeros((0, 0), dtype=np.float32))
-                if tracker:
-                    tracker.emit("file_empty", source_key=key, files_done=i, files_total=len(changed))
-                continue
-            if tracker:
-                tracker.emit("embed_start", source_key=key, chunks=len(chunks), files_done=i - 1, files_total=len(changed))
-            if embedder:
-                vectors = await asyncio.to_thread(embedder.embed, [c.text for c in chunks])
-            else:
-                vectors = np.zeros((0, 0), dtype=np.float32)
-            await store.replace_source(key, remote[key], model, chunks, vectors)
-            elapsed = int((time.perf_counter() - started) * 1000)
-            log.info(
-                "Re-chunked and stored %s (%s chunks)",
-                key,
-                len(chunks),
-                extra={
-                    "pipeline": "ingest",
-                    "stage": "file_ok",
-                    "source_key": key,
-                    "chunks": len(chunks),
-                    "duration_ms": elapsed,
-                    "files_done": i,
-                },
-            )
-            if tracker:
-                tracker.emit(
-                    "file_ok",
-                    source_key=key,
-                    chunks=len(chunks),
-                    duration_ms=elapsed,
-                    files_done=i,
-                    files_total=len(changed),
-                )
-        finally:
-            ingest_source_key.reset(key_token)
+            finally:
+                ingest_source_key.reset(key_token)
 
     index = VespaSearchIndex(store)
     docs_indexed = store.count_chunks() if hasattr(store, "count_chunks") else 0
@@ -220,73 +235,84 @@ async def sync_one(
     model = embedder.model if embedder else ""
     key_token = ingest_source_key.set(source_key)
     started = time.perf_counter()
-    if tracker:
-        tracker.emit("file_start", source_key=source_key, files_total=1)
-    try:
-        if hasattr(store, "ensure_ready"):
-            await store.ensure_ready()
-        if deleted:
-            await store.delete_sources([source_key])
-            log.info(
-                "Deleted %s from Vespa",
-                source_key,
-                extra={"pipeline": "ingest", "stage": "file_deleted", "source_key": source_key, "outcome": "deleted"},
-            )
-            if tracker:
-                tracker.emit("file_deleted", source_key=source_key, files_done=1, files_total=1)
-            return "deleted"
-        stored = ""
-        if hasattr(store, "source_etag"):
-            stored = await store.source_etag(source_key) or ""
-        if stored == etag and etag:
-            log.info(
-                "Skipped unchanged %s",
-                source_key,
-                extra={"pipeline": "ingest", "stage": "file_reused", "source_key": source_key, "outcome": "reused"},
-            )
-            if tracker:
-                tracker.emit("file_reused", source_key=source_key, files_done=1, files_total=1, files_reused=1)
-            return "reused"
-        data = await fetch_bytes(source_key)
-        chunks = await asyncio.to_thread(ingest_bytes, source_key, data)
-        if not chunks:
-            log.warning(
-                "No usable chunks from %s",
-                source_key,
-                extra={"pipeline": "ingest", "stage": "file_empty", "source_key": source_key},
-            )
-            await store.replace_source(source_key, etag, model, [], np.zeros((0, 0), dtype=np.float32))
-            if tracker:
-                tracker.emit("file_empty", source_key=source_key, files_done=1, files_total=1)
-            return "empty"
-        if embedder:
-            vectors = await asyncio.to_thread(embedder.embed, [c.text for c in chunks])
-        else:
-            vectors = np.zeros((0, 0), dtype=np.float32)
-        await store.replace_source(source_key, etag, model, chunks, vectors)
-        elapsed = int((time.perf_counter() - started) * 1000)
-        log.info(
-            "Re-chunked and stored %s (%s chunks)",
-            source_key,
-            len(chunks),
-            extra={
-                "pipeline": "ingest",
-                "stage": "file_ok",
-                "source_key": source_key,
-                "chunks": len(chunks),
-                "duration_ms": elapsed,
-                "outcome": "changed",
-            },
-        )
+    with get_tracer().start_as_current_span("ingest.file") as span:
+        span.set_attribute("ingest.source_key", source_key)
         if tracker:
-            tracker.emit(
-                "file_ok",
-                source_key=source_key,
-                chunks=len(chunks),
-                duration_ms=elapsed,
-                files_done=1,
-                files_total=1,
+            tracker.emit("file_start", source_key=source_key, files_total=1)
+        try:
+            if hasattr(store, "ensure_ready"):
+                await store.ensure_ready()
+            if deleted:
+                await store.delete_sources([source_key])
+                INGEST_FILES.labels("deleted").inc()
+                log.info(
+                    "Deleted %s from Vespa",
+                    source_key,
+                    extra={"pipeline": "ingest", "stage": "file_deleted", "source_key": source_key, "outcome": "deleted"},
+                )
+                if tracker:
+                    tracker.emit("file_deleted", source_key=source_key, files_done=1, files_total=1)
+                return "deleted"
+            stored = ""
+            if hasattr(store, "source_etag"):
+                stored = await store.source_etag(source_key) or ""
+            if stored == etag and etag:
+                INGEST_FILES.labels("reused").inc()
+                log.info(
+                    "Skipped unchanged %s",
+                    source_key,
+                    extra={"pipeline": "ingest", "stage": "file_reused", "source_key": source_key, "outcome": "reused"},
+                )
+                if tracker:
+                    tracker.emit("file_reused", source_key=source_key, files_done=1, files_total=1, files_reused=1)
+                return "reused"
+            data = await fetch_bytes(source_key)
+            chunks = await asyncio.to_thread(ingest_bytes, source_key, data)
+            if not chunks:
+                INGEST_FILES.labels("empty").inc()
+                log.warning(
+                    "No usable chunks from %s",
+                    source_key,
+                    extra={"pipeline": "ingest", "stage": "file_empty", "source_key": source_key},
+                )
+                await store.replace_source(source_key, etag, model, [], np.zeros((0, 0), dtype=np.float32))
+                if tracker:
+                    tracker.emit("file_empty", source_key=source_key, files_done=1, files_total=1)
+                return "empty"
+            if embedder:
+                vectors = await asyncio.to_thread(embedder.embed, [c.text for c in chunks])
+            else:
+                vectors = np.zeros((0, 0), dtype=np.float32)
+            await store.replace_source(source_key, etag, model, chunks, vectors)
+            elapsed = int((time.perf_counter() - started) * 1000)
+            INGEST_FILES.labels("ok").inc()
+            INGEST_CHUNKS.inc(len(chunks))
+            span.set_attribute("ingest.chunks", len(chunks))
+            log.info(
+                "Re-chunked and stored %s (%s chunks)",
+                source_key,
+                len(chunks),
+                extra={
+                    "pipeline": "ingest",
+                    "stage": "file_ok",
+                    "source_key": source_key,
+                    "chunks": len(chunks),
+                    "duration_ms": elapsed,
+                    "outcome": "changed",
+                },
             )
-        return "changed"
-    finally:
-        ingest_source_key.reset(key_token)
+            if tracker:
+                tracker.emit(
+                    "file_ok",
+                    source_key=source_key,
+                    chunks=len(chunks),
+                    duration_ms=elapsed,
+                    files_done=1,
+                    files_total=1,
+                )
+            return "changed"
+        except Exception:
+            INGEST_FILES.labels("error").inc()
+            raise
+        finally:
+            ingest_source_key.reset(key_token)

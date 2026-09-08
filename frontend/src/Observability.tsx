@@ -87,6 +87,8 @@ export type IngestStatus = {
   index_version: string;
   ingesting: boolean;
   runs: IngestRun[];
+  otel_exporting?: boolean;
+  otel_service_name?: string;
 };
 
 type KnowledgeChunk = {
@@ -162,6 +164,13 @@ export default function Observability({
         <div>
           <label>Vespa chunks</label>
           <strong>{status.docs_indexed}</strong>
+        </div>
+        <div>
+          <label>OTLP</label>
+          <strong>
+            {status.otel_exporting ? "exporting" : "local only"}
+            {status.otel_service_name ? ` · ${status.otel_service_name}` : ""}
+          </strong>
         </div>
       </div>
       {live.last_error ? <div className="obs-error">{live.last_error}</div> : null}

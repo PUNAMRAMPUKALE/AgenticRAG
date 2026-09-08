@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 
 from app.api.deps import get_container
 from app.application.container import AppContainer
+from app.core.metrics import VESPA_CHUNKS, render_metrics
 
 router = APIRouter(tags=["ops"])
 
@@ -19,6 +20,10 @@ async def health(request: Request):
     except Exception:
         docs = 0
     knowledge.docs_indexed = docs
+    try:
+        VESPA_CHUNKS.set(docs)
+    except Exception:
+        pass
     ingest_watch = container.s3_pipeline is not None or container.ingest_watcher is not None
     status = await container.health.status(
         docs_indexed=docs,
@@ -33,3 +38,9 @@ async def health(request: Request):
         ingest_files_total=knowledge.tracker.live.files_changed or knowledge.tracker.live.files_total,
     )
     return asdict(status)
+
+
+@router.get("/metrics")
+async def metrics():
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)

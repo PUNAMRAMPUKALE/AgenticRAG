@@ -9,6 +9,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
+
 log = logging.getLogger("app.access")
 
 
@@ -21,6 +23,14 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         started = time.perf_counter()
         response = await call_next(request)
         duration_ms = int((time.perf_counter() - started) * 1000)
+        route = getattr(request.scope.get("route"), "path", None) or request.url.path
+        HTTP_REQUESTS.labels(request.method, route, str(response.status_code)).inc()
+        HTTP_LATENCY.labels(request.method, route).observe((time.perf_counter() - started))
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("http.request_id", rid)
         response.headers["X-Request-ID"] = rid
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"

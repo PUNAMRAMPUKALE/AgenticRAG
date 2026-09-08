@@ -1,0 +1,44 @@
+{
+  "title": "Agentic RAG",
+  "uid": "agenticrag-prod",
+  "schemaVersion": 39,
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Vespa chunks",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "agenticrag_vespa_chunks", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP requests / s",
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 },
+      "targets": [{ "expr": "sum(rate(agenticrag_http_requests_total[5m])) by (route, status)", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP latency p95",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(agenticrag_http_request_duration_seconds_bucket[5m])) by (le, route))", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingest files",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{ "expr": "sum(increase(agenticrag_ingest_files_total[1h])) by (outcome)", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Chat results",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [{ "expr": "sum(increase(agenticrag_chat_requests_total[1h])) by (result)", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Vespa search p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(agenticrag_vespa_search_duration_seconds_bucket[5m])) by (le))", "refId": "A" }]
+    }
+  ]
+}

@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     llm_choice: str = "gpt-4o-mini"
     llm_base_url: str = "https://api.openai.com/v1"
     openai_embedding_model: str = "text-embedding-3-small"
+    otel_service_name: str = "agenticrag"
+    otel_exporter_otlp_endpoint: str = ""
+    otel_exporter_otlp_headers: str = ""
+    otel_console_spans: bool = False
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
