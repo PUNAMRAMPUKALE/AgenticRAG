@@ -301,7 +301,11 @@ export default function App() {
       return;
     }
     if (!res.ok || !res.body) {
-      setMessages((m) => [...m, { role: "assistant", content: `Request failed (${res.status}).` }]);
+      const body = (await res.json().catch(() => ({}))) as { detail?: string };
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: body.detail || `Request failed (${res.status}).` },
+      ]);
       setBusy(false);
       return;
     }
