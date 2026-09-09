@@ -39,6 +39,18 @@
       "title": "Vespa search p95",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(agenticrag_vespa_search_duration_seconds_bucket[5m])) by (le))", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Guardrail decisions",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [{ "expr": "sum(increase(agenticrag_guard_events_total[1h])) by (guard_type, decision)", "refId": "A" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Estimated LLM cost USD",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [{ "expr": "sum(increase(agenticrag_llm_cost_usd_total[1h])) by (intent)", "refId": "A" }]
     }
   ]
 }

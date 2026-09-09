@@ -8,7 +8,9 @@ from app.core.metrics import EVAL_CASES, EVAL_RUNS
 from app.core.telemetry import get_tracer
 from app.domain.ports import SearchIndex
 from app.evals.score import score_case, summarize
-from app.infrastructure.llm.assistant import KnowledgeAssistant, extractive_answer, retrieve
+from app.infrastructure.agents.orchestrator import KnowledgeOrchestrator
+from app.infrastructure.agents.supervisor import keyword_intent
+from app.infrastructure.llm.assistant import extractive_answer, retrieve
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ async def run_evals(
 ) -> dict:
     dataset = load_dataset(dataset_path)
     min_rate = float(dataset.get("min_pass_rate") or 0.75)
-    assistant = KnowledgeAssistant()
+    orchestrator = KnowledgeOrchestrator() if generate else None
     scores = []
     with get_tracer().start_as_current_span("eval.run") as span:
         span.set_attribute("eval.generate", generate)
@@ -39,12 +41,16 @@ async def run_evals(
             query = str(case.get("query") or "")
             with get_tracer().start_as_current_span("eval.case") as case_span:
                 case_span.set_attribute("eval.case_id", str(case.get("id") or ""))
-                if generate:
-                    answer, citations, used_llm = await assistant.generate(query, index)
+                if generate and orchestrator is not None:
+                    turn = await orchestrator.generate(query, index)
+                    answer, citations, predicted = turn.answer, turn.citations, turn.intent
                 else:
                     formatted, citations = retrieve(index, query)
-                    answer, used_llm = extractive_answer(formatted, citations), False
-                scored = score_case(case, citations=citations, answer=answer)
+                    answer = extractive_answer(formatted, citations)
+                    predicted = keyword_intent(query)
+                scored = score_case(
+                    case, citations=citations, answer=answer, predicted_intent=predicted
+                )
                 scores.append(scored)
                 EVAL_CASES.labels("pass" if scored.passed else "fail").inc()
                 case_span.set_attribute("eval.pass", scored.passed)

@@ -32,6 +32,9 @@ VESPA_SEARCH = Histogram(
 VESPA_CHUNKS = Gauge("agenticrag_vespa_chunks", "Chunks currently in Vespa")
 EVAL_RUNS = Counter("agenticrag_eval_runs_total", "Gold eval suite runs", ["result"])
 EVAL_CASES = Counter("agenticrag_eval_cases_total", "Gold eval cases", ["result"])
+GUARD_EVENTS = Counter("agenticrag_guard_events_total", "Guardrail decisions", ["guard_type", "decision"])
+LLM_TOKENS = Counter("agenticrag_llm_tokens_total", "Estimated LLM tokens", ["direction", "intent"])
+LLM_COST = Counter("agenticrag_llm_cost_usd_total", "Estimated LLM USD", ["intent"])
 
 
 def render_metrics() -> tuple[bytes, str]:

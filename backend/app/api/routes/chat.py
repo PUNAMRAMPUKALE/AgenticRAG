@@ -42,6 +42,12 @@ async def chat(
         done = {"type": "done", "session_id": result.session_id, "cache_hit": result.cache_hit}
         if not result.cache_hit:
             done["used_llm"] = result.used_llm
+            if result.intent:
+                done["intent"] = result.intent
+            if result.hitl_pending:
+                done["hitl_pending"] = True
+            if result.cost_usd:
+                done["cost_usd"] = result.cost_usd
         yield _sse(done)
 
     return StreamingResponse(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 
 from app.api.deps import get_container, require_any_role
 from app.application.container import AppContainer
@@ -13,6 +14,10 @@ from app.infrastructure.retrieval.ingest_queue import enqueue_full_reindex
 
 router = APIRouter(prefix="/v1", tags=["admin"])
 _eval_lock = asyncio.Lock()
+
+
+class HitlResolveBody(BaseModel):
+    note: str = Field(default="", max_length=500)
 
 
 @router.post("/reindex")
@@ -103,3 +108,28 @@ async def run_eval_suite(
             report["vespa_chunks"] = 0
         report["run_by"] = principal.username
         return report
+
+
+@router.get("/hitl")
+async def list_hitl(
+    principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
+    container: AppContainer = Depends(get_container),
+):
+    if container.hitl is None:
+        return {"items": []}
+    return {"items": await container.hitl.list_pending()}
+
+
+@router.post("/hitl/{item_id}/resolve")
+async def resolve_hitl(
+    item_id: str,
+    body: HitlResolveBody,
+    principal: Principal = Depends(require_any_role(*REINDEX_ROLES)),
+    container: AppContainer = Depends(get_container),
+):
+    if container.hitl is None:
+        raise AppError(503, "HITL queue is not available")
+    found = await container.hitl.resolve(item_id, body.note)
+    if not found:
+        raise AppError(404, "HITL item not found")
+    return {"ok": True, "id": item_id, "resolved_by": principal.username}

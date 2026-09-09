@@ -32,7 +32,9 @@ Author / CMS  →  S3 (original files)
                      └─ periodic reconcile (optional)
                      │
                      ▼
-              API chat: embed query → Vespa hybrid search → LLM
+              API chat: input guard → supervisor (intent) → MCP search_knowledge (Vespa)
+                         → specialist RAG → quality critic (optional rewrite)
+                         → output guard. Escalation queues HITL, no auto-answer.
 ```
 
 Set `KNOWLEDGE_S3_QUEUE_URL` and run `python -m app.worker.ingest`. Point the bucket (prefix) at that queue. Set `KNOWLEDGE_S3_DLQ_URL` (or an SQS redrive policy) so failed objects leave the main queue after `KNOWLEDGE_S3_MAX_RECEIVE` attempts. Without a queue URL the worker still lists the bucket on a timer.
@@ -144,23 +146,40 @@ docker compose --profile obs up -d
 
 Jaeger UI: http://127.0.0.1:16686. Grafana: http://127.0.0.1:3000 (anonymous viewer, or admin/admin). Prometheus: http://127.0.0.1:9090.
 
+## Ask path (Week 8 orchestration)
+
+Chat `POST /v1/chat` runs a supervisor graph, not a single retrieve-then-LLM hop:
+
+1. **Input guard** (regex, fail-open) — SSN, investment advice, competitor, harm. Blocked users only see the Horizon Trust knowledge-only fallback; the reason is never returned.
+2. **Supervisor** — routes `policy` / `operations` / `treasury` / `escalation` (keyword first; LLM classify when `LLM_API_KEY` is set). Unrecognised → `policy`.
+3. **MCP tool `search_knowledge`** — hybrid Vespa retrieve (same tool as `python -m app.mcp_server` over stdio).
+4. **Specialist** — RAG answer from retrieved chunks.
+5. **Quality critic** — faithfulness JSON score; at most one rewrite if the critic flags the answer.
+6. **Output guard** (fail-closed) — SSN/competitor in the model text is replaced with the safe fallback.
+
+**HITL:** complaints / legal / explicit human requests skip RAG and enqueue Redis `hitl:queue`. Managers list and resolve items from Observability (`GET /v1/hitl`, `POST /v1/hitl/{id}/resolve`).
+
+**Cost:** tiktoken estimates plus gpt-4o-mini list prices from the Week 8 slides (`$0.15 / $0.60` per 1M tokens). Prometheus: `agenticrag_llm_tokens_total`, `agenticrag_llm_cost_usd_total`, `agenticrag_guard_events_total`.
+
+**Evals:** citation hit + required phrases + `routing_accuracy` + mean MRR. LangSmith evaluators emit the same keys.
+
 ## What is still later
 
-MCP, HITL, and a dedicated `agenticrag_app` DB password in every environment. Production refuses to boot without a Google domain, SQS ingest queue, `INGEST_IN_API=false`, and `MIGRATE_ON_BOOT=false`. Manager reindex enqueues to SQS.
+A dedicated `agenticrag_app` DB password in every environment. Production refuses to boot without a Google domain, SQS ingest queue, `INGEST_IN_API=false`, and `MIGRATE_ON_BOOT=false`. Manager reindex enqueues to SQS.
 
 ## Evals
 
-Gold cases live in `backend/app/evals/cases.json` (KYC, payment SOP, Q2 liquidity, service operations runbook). Scoring checks citation `file_id` and required phrases; no extra LLM-judge package.
+Gold cases live in `backend/app/evals/cases.json` (KYC, payment SOP, Q2 liquidity, service operations runbook). Scoring checks citation `file_id`, required phrases, supervisor intent (`routing_accuracy`), and MRR.
 
 Vespa must already have chunks. From `backend/`:
 
 ```bash
 python -m app.evals
 python -m app.evals --generate
-python -m unittest tests.test_eval_score
+python -m unittest tests.test_eval_score tests.test_guards tests.test_supervisor
 ```
 
-Exit `0` if pass rate ≥ `min_pass_rate` (default 0.75), `1` if the suite fails, `2` if Vespa is empty or down. `--generate` uses the same chat generator as production (LLM when `LLM_API_KEY` is set).
+Exit `0` if pass rate ≥ `min_pass_rate` (default 0.75), `1` if the suite fails, `2` if Vespa is empty or down. `--generate` uses the production orchestrator (supervisor + MCP retrieve + quality critic when `LLM_API_KEY` is set).
 
 Managers can run the same suite from the Observability page or `POST /v1/evals` (`?generate=true` optional).
 

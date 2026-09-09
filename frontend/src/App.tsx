@@ -18,6 +18,8 @@ type ChatMessage = {
   content: string;
   citations?: Citation[];
   cache_hit?: boolean;
+  intent?: string;
+  hitl_pending?: boolean;
 };
 
 type ConvoSummary = {
@@ -30,6 +32,7 @@ const HINTS = [
   "What is the KYC client onboarding procedure?",
   "What does the payment operations standard operating procedure cover at Horizon Trust?",
   "Summarize the Q2 2026 liquidity risk report.",
+  "I am furious and want to file a complaint with a manager",
 ];
 
 type KnowledgeChunk = {
@@ -316,6 +319,29 @@ export default function App() {
     let assistant = "";
     let citations: Citation[] = [];
     let hit = false;
+    let intent = "";
+    let hitlPending = false;
+
+    const applyEvent = (ev: Record<string, unknown>) => {
+      if (ev.type === "session" && typeof ev.session_id === "string") {
+        setSessionId(ev.session_id);
+        if (typeof ev.redis === "boolean") setRedisOn(ev.redis);
+      }
+      if (ev.type === "cache_hit") {
+        hit = Boolean(ev.value);
+        setCacheBanner(
+          hit ? "Redis hit — same user, chat, question, and index version. No new search." : null
+        );
+      }
+      if (ev.type === "token" && typeof ev.text === "string") assistant = ev.text;
+      if (ev.type === "citations" && Array.isArray(ev.citations)) {
+        citations = ev.citations as Citation[];
+      }
+      if (ev.type === "done") {
+        if (typeof ev.intent === "string") intent = ev.intent;
+        if (ev.hitl_pending) hitlPending = true;
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -326,26 +352,19 @@ export default function App() {
       for (const part of parts) {
         const line = part.replace(/^data:\s*/, "");
         if (!line) continue;
-        let ev: Record<string, unknown>;
         try {
-          ev = JSON.parse(line) as Record<string, unknown>;
+          applyEvent(JSON.parse(line) as Record<string, unknown>);
         } catch {
           continue;
         }
-        if (ev.type === "session" && typeof ev.session_id === "string") {
-          setSessionId(ev.session_id);
-          if (typeof ev.redis === "boolean") setRedisOn(ev.redis);
-        }
-        if (ev.type === "cache_hit") {
-          hit = Boolean(ev.value);
-          setCacheBanner(
-            hit ? "Redis hit — same user, chat, question, and index version. No new search." : null
-          );
-        }
-        if (ev.type === "token" && typeof ev.text === "string") assistant = ev.text;
-        if (ev.type === "citations" && Array.isArray(ev.citations)) {
-          citations = ev.citations as Citation[];
-        }
+      }
+    }
+    if (buf.trim()) {
+      const line = buf.replace(/^data:\s*/, "");
+      try {
+        applyEvent(JSON.parse(line) as Record<string, unknown>);
+      } catch {
+        /* incomplete trailer */
       }
     }
 
@@ -356,6 +375,8 @@ export default function App() {
         content: assistant || "No answer came back.",
         citations,
         cache_hit: hit,
+        intent: intent || undefined,
+        hitl_pending: hitlPending || undefined,
       },
     ]);
     setBusy(false);
@@ -494,6 +515,12 @@ export default function App() {
               {messages.map((m, i) => (
                 <div className={`bubble ${m.role}`} key={i}>
                   <div className="body">{m.content}</div>
+                  {m.intent || m.hitl_pending ? (
+                    <div className="bubble-meta">
+                      {m.intent ? `intent: ${m.intent}` : ""}
+                      {m.hitl_pending ? " · waiting for a manager" : ""}
+                    </div>
+                  ) : null}
                   {m.citations && m.citations.length > 0 ? (
                     <div className="cites">
                       {m.citations.map((c) => (

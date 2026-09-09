@@ -74,6 +74,9 @@ export type EvalCaseResult = {
   cited_file_ids: string[];
   missing_phrases: string[];
   detail: string;
+  routing_ok?: boolean;
+  mrr?: number;
+  predicted_intent?: string;
 };
 
 export type EvalReport = {
@@ -83,6 +86,8 @@ export type EvalReport = {
   pass_rate: number;
   min_pass_rate: number;
   ok: boolean;
+  mrr_mean?: number;
+  routing_accuracy?: number;
   generate?: boolean;
   vespa_chunks?: number;
   langsmith?: { dataset?: string; url?: string; project?: string };
@@ -126,6 +131,16 @@ type KnowledgeChunk = {
   page?: string;
 };
 
+type HitlItem = {
+  id: string;
+  query: string;
+  user_id: string;
+  session_id: string;
+  reason: string;
+  status: string;
+  ts: number;
+};
+
 type Props = {
   status: IngestStatus;
   chunkFile: string;
@@ -149,6 +164,9 @@ export default function Observability({
   const [evalBusy, setEvalBusy] = useState(false);
   const [evalError, setEvalError] = useState("");
   const [evalReport, setEvalReport] = useState<EvalReport | null>(null);
+  const [hitlItems, setHitlItems] = useState<HitlItem[]>([]);
+  const [hitlError, setHitlError] = useState("");
+  const [hitlBusy, setHitlBusy] = useState(false);
 
   const live = status.live;
   const documents = status.documents ?? [];
@@ -195,6 +213,47 @@ export default function Observability({
     }
   }
 
+  async function loadHitl() {
+    setHitlBusy(true);
+    setHitlError("");
+    try {
+      const res = await apiFetch("/v1/hitl");
+      const body = await res.text();
+      if (!res.ok) {
+        setHitlError(body.slice(0, 400) || `HITL list failed (${res.status})`);
+        return;
+      }
+      const parsed = JSON.parse(body) as { items?: HitlItem[] };
+      setHitlItems(parsed.items ?? []);
+    } catch (err) {
+      setHitlError(err instanceof Error ? err.message : "HITL request failed");
+    } finally {
+      setHitlBusy(false);
+    }
+  }
+
+  async function resolveHitl(id: string) {
+    setHitlBusy(true);
+    setHitlError("");
+    try {
+      const res = await apiFetch(`/v1/hitl/${id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: "resolved in UI" }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        setHitlError(body.slice(0, 400) || `Resolve failed (${res.status})`);
+        setHitlBusy(false);
+        return;
+      }
+      await loadHitl();
+    } catch (err) {
+      setHitlError(err instanceof Error ? err.message : "HITL resolve failed");
+      setHitlBusy(false);
+    }
+  }
+
   return (
     <div className="obs">
       <div className="obs-kpis">
@@ -229,6 +288,29 @@ export default function Observability({
         </div>
       </div>
       {live.last_error ? <div className="obs-error">{live.last_error}</div> : null}
+
+      <section>
+        <h2>Human review queue</h2>
+        <p className="obs-hint">Escalations skip RAG until a manager resolves them.</p>
+        <div className="obs-filters">
+          <button type="button" disabled={hitlBusy} onClick={() => void loadHitl()}>
+            {hitlBusy ? "Loading…" : "Refresh HITL"}
+          </button>
+        </div>
+        {hitlError ? <div className="obs-error">{hitlError}</div> : null}
+        <ul className="obs-log">
+          {hitlItems.length === 0 ? <li className="muted">No pending items.</li> : null}
+          {hitlItems.map((item) => (
+            <li key={item.id}>
+              <b>{item.reason}</b>
+              <span>{item.query}</span>
+              <button type="button" className="ghost" disabled={hitlBusy} onClick={() => void resolveHitl(item.id)}>
+                Resolve
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <div className="obs-filters">
         <select value={traceFilter} onChange={(e) => setTraceFilter(e.target.value)}>
@@ -417,6 +499,8 @@ export default function Observability({
             <p>
               {evalReport.ok ? "PASS" : "FAIL"} · {evalReport.passed}/{evalReport.cases_total} · rate{" "}
               {evalReport.pass_rate} (min {evalReport.min_pass_rate})
+              {evalReport.routing_accuracy != null ? ` · routing ${evalReport.routing_accuracy}` : ""}
+              {evalReport.mrr_mean != null ? ` · MRR ${evalReport.mrr_mean}` : ""}
               {evalReport.vespa_chunks != null ? ` · ${evalReport.vespa_chunks} chunks` : ""}
             </p>
             {evalReport.langsmith?.url ? (
@@ -436,6 +520,8 @@ export default function Observability({
                   <em>
                     {row.detail}
                     {row.cited_file_ids.length ? ` · ${row.cited_file_ids.join(", ")}` : ""}
+                    {row.predicted_intent ? ` · intent ${row.predicted_intent}` : ""}
+                    {row.mrr != null ? ` · mrr ${row.mrr}` : ""}
                     {row.missing_phrases.length ? ` · missing ${row.missing_phrases.join(", ")}` : ""}
                   </em>
                 </li>

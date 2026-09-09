@@ -57,6 +57,22 @@ class ScoreTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(report["passed"], 1)
 
+    def test_routing_mismatch_fails(self):
+        scored = score_case(
+            {
+                "id": "kyc",
+                "expected_file_ids": ["KYC_Client_Onboarding"],
+                "must_contain": ["kyc"],
+                "expected_intent": "policy",
+            },
+            citations=[{"file_id": "compliance/KYC_Client_Onboarding_Procedure"}],
+            answer="The KYC procedure requires identity checks.",
+            predicted_intent="treasury",
+        )
+        self.assertFalse(scored.passed)
+        self.assertFalse(scored.routing_ok)
+        self.assertGreater(scored.mrr, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

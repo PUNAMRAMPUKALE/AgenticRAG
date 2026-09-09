@@ -9,10 +9,11 @@ from app.application.health_service import HealthService
 from app.application.knowledge_service import KnowledgeService
 from app.core.config import Settings
 from app.domain.ports import AnswerCache, ConversationRepository, IdentityProvider, SessionStore
+from app.infrastructure.agents.hitl import HitlQueue
+from app.infrastructure.agents.orchestrator import KnowledgeOrchestrator
 from app.infrastructure.cache.answers import RedisAnswerCache, connect_redis
 from app.infrastructure.identity.google import GoogleIdentity
 from app.infrastructure.identity.sessions import RedisSessionStore
-from app.infrastructure.llm.assistant import KnowledgeAssistant
 from app.infrastructure.persistence.conversations import PostgresConversationRepository
 from app.infrastructure.persistence.ingest_runs import IngestRunRepository
 from app.infrastructure.retrieval.corpus import CorpusKnowledgeLoader
@@ -36,6 +37,7 @@ class AppContainer:
     redis_client: Any = None
     ingest_watcher: KnowledgeIngestWatcher | None = None
     s3_pipeline: KnowledgeS3Pipeline | None = None
+    hitl: HitlQueue | None = None
 
     async def aclose(self) -> None:
         if self.ingest_watcher is not None:
@@ -97,8 +99,8 @@ async def build_container(settings: Settings, *, run_ingest: bool | None = None)
 
     identity = GoogleIdentity(settings)
     sessions = RedisSessionStore(redis_client, ttl_seconds=settings.session_hours * 3600)
-
-    generator = KnowledgeAssistant()
+    hitl = HitlQueue(redis_client)
+    generator = KnowledgeOrchestrator(hitl)
     ingest_watcher: KnowledgeIngestWatcher | None = None
     s3_pipeline: KnowledgeS3Pipeline | None = None
     if source == "s3" and start_ingest:
@@ -134,5 +136,6 @@ async def build_container(settings: Settings, *, run_ingest: bool | None = None)
         redis_client=redis_client,
         ingest_watcher=ingest_watcher,
         s3_pipeline=s3_pipeline,
+        hitl=hitl,
     )
 

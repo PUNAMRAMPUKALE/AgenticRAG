@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.domain.identity import Principal
 from app.domain.models import Chunk, Conversation, ConversationSummary, Message
+
+
+@dataclass
+class AgentTurn:
+    """One orchestrated ask (Week 8 SupportState analogue)."""
+
+    answer: str
+    citations: list[dict] = field(default_factory=list)
+    used_llm: bool = False
+    intent: str = "policy"
+    hitl_pending: bool = False
+    blocked: bool = False
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    quality_retries: int = 0
+    context: str = ""
 
 
 class ConversationRepository(Protocol):
@@ -16,7 +35,7 @@ class ConversationRepository(Protocol):
         self, session_id: str, message: Message, *, user_id: str, is_manager: bool = False
     ) -> None: ...
     async def upsert_profile(
-        self, user_id: str, email: str, full_name: str, *, is_manager: bool
+        self, user_id: str, email: str, full_name: str, *, is_manager: bool = False
     ) -> None: ...
     async def log_request(
         self, user_id: str, user_query: str, session_id: str | None, *, is_manager: bool = False
@@ -53,7 +72,7 @@ class SearchIndex(Protocol):
 
 
 class AnswerGenerator(Protocol):
-    async def generate(self, query: str, index: SearchIndex) -> tuple[str, list[dict], bool]: ...
+    async def generate(self, query: str, index: SearchIndex) -> AgentTurn: ...
 
 
 class KnowledgeLoader(Protocol):

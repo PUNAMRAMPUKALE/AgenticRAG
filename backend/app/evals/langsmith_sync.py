@@ -4,7 +4,7 @@ import logging
 import os
 
 from app.core.config import Settings
-from app.evals.score import CaseScore, score_case
+from app.evals.score import CaseScore, reciprocal_rank, score_case
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ def _ensure_dataset(client, name: str, cases: list[dict]):
                         "expected_file_ids": list(case.get("expected_file_ids") or []),
                         "must_contain": list(case.get("must_contain") or []),
                         "abstain": bool(case.get("abstain")),
+                        "expected_intent": str(case.get("expected_intent") or ""),
                     },
                 }
                 for case in cases
@@ -93,11 +94,18 @@ async def publish_experiment(
             "answer": scored.answer,
             "cited_file_ids": scored.cited_file_ids,
             "case_id": scored.case_id,
+            "predicted_intent": scored.predicted_intent,
+            "mrr": scored.mrr,
         }
 
     def pass_score(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
         citations = [{"file_id": fid} for fid in (outputs.get("cited_file_ids") or [])]
-        scored = score_case(reference_outputs or {}, citations=citations, answer=str(outputs.get("answer") or ""))
+        scored = score_case(
+            reference_outputs or {},
+            citations=citations,
+            answer=str(outputs.get("answer") or ""),
+            predicted_intent=str(outputs.get("predicted_intent") or ""),
+        )
         return {"key": "pass", "score": 1.0 if scored.passed else 0.0}
 
     def retrieval_score(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
@@ -105,11 +113,22 @@ async def publish_experiment(
         scored = score_case(reference_outputs or {}, citations=citations, answer=str(outputs.get("answer") or ""))
         return {"key": "retrieval_hit", "score": 1.0 if scored.retrieval_hit else 0.0}
 
+    def routing_score(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+        expected = str((reference_outputs or {}).get("expected_intent") or "")
+        predicted = str(outputs.get("predicted_intent") or "")
+        ok = (not expected) or predicted == expected
+        return {"key": "routing_accuracy", "score": 1.0 if ok else 0.0}
+
+    def mrr_score(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
+        citations = [{"file_id": fid} for fid in (outputs.get("cited_file_ids") or [])]
+        expected = [str(x) for x in ((reference_outputs or {}).get("expected_file_ids") or [])]
+        return {"key": "mrr", "score": reciprocal_rank(expected, citations)}
+
     mode = "generate" if generate else "retrieval"
     results = await aevaluate(
         target,
         data=dataset.name,
-        evaluators=[pass_score, retrieval_score],
+        evaluators=[pass_score, retrieval_score, routing_score, mrr_score],
         experiment_prefix=f"agenticrag-{mode}",
         description="Gold Vespa citation evals from AgenticRAG",
         metadata={"generate": generate, "service": "agenticrag"},

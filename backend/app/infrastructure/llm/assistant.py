@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from app.core.errors import EmptyQuery, QueryRejected
 from app.domain.ports import SearchIndex
 from app.infrastructure.retrieval.guardrails import citation_snippet, guard_query
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 log = logging.getLogger(__name__)
 
@@ -63,11 +66,27 @@ class KnowledgeAssistant:
             return extractive_answer(formatted, citations), citations, False
         return str(answer), citations, True
 
-    async def _run_llm(self, query: str, index: SearchIndex, api_key: str) -> str:
-        from pydantic_ai import Agent, RunContext
-        from pydantic_ai.models.openai import OpenAIChatModel
-        from pydantic_ai.providers.openai import OpenAIProvider
+    async def answer_from_retrieval(
+        self,
+        query: str,
+        index: SearchIndex,
+        formatted: str,
+        citations: list[dict],
+    ) -> tuple[str, bool]:
+        api_key = os.getenv("LLM_API_KEY", "").strip()
+        if not api_key:
+            return extractive_answer(formatted, citations), False
+        try:
+            from app.core.telemetry import get_tracer
 
+            with get_tracer().start_as_current_span("chat.llm"):
+                answer = await self._run_llm_grounded(query, formatted, api_key)
+            return str(answer), True
+        except Exception:
+            log.exception("LLM generate failed; using extractive answer")
+            return extractive_answer(formatted, citations), False
+
+    async def _run_llm(self, query: str, index: SearchIndex, api_key: str) -> str:
         model = OpenAIChatModel(
             os.getenv("LLM_CHOICE") or "gpt-4o-mini",
             provider=OpenAIProvider(
@@ -96,4 +115,24 @@ class KnowledgeAssistant:
             return text
 
         result = await agent.run(query, deps=AgentDeps(index=index))
+        return getattr(result, "output", None) or getattr(result, "data", None) or str(result)
+
+    async def _run_llm_grounded(self, query: str, formatted: str, api_key: str) -> str:
+        model = OpenAIChatModel(
+            os.getenv("LLM_CHOICE") or "gpt-4o-mini",
+            provider=OpenAIProvider(
+                base_url=os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1",
+                api_key=api_key,
+            ),
+        )
+        agent = Agent(
+            model,
+            system_prompt=(
+                "You are a Horizon Trust knowledge assistant. Answer only from CONTEXT. "
+                "Cite file_id and as-of. If CONTEXT is empty, say it is not in the knowledge base. "
+                "Lead with the direct answer."
+            ),
+            retries=1,
+        )
+        result = await agent.run(f"CONTEXT:\n{(formatted or '')[:12000]}\n\nQUESTION:\n{query}")
         return getattr(result, "output", None) or getattr(result, "data", None) or str(result)
