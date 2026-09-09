@@ -152,9 +152,9 @@ Chat `POST /v1/chat` runs a supervisor graph, not a single retrieve-then-LLM hop
 
 1. **Input guard** (regex, fail-open) — SSN, investment advice, competitor, harm. Blocked users only see the Horizon Trust knowledge-only fallback; the reason is never returned.
 2. **Supervisor** — routes `policy` / `operations` / `treasury` / `escalation` (keyword first; LLM classify when `LLM_API_KEY` is set). Unrecognised → `policy`.
-3. **MCP tool `search_knowledge`** — hybrid Vespa retrieve (same tool as `python -m app.mcp_server` over stdio).
-4. **Specialist** — RAG answer from retrieved chunks.
-5. **Quality critic** — faithfulness JSON score; at most one rewrite if the critic flags the answer.
+3. **MCP tool `search_knowledge`** — hybrid Vespa retrieve (shared knowledge base).
+4. **Specialist** — a **separate** policy, operations, or treasury agent. Each has its own tools (currently **mock** JSON; swap the functions in `policy_agent.py`, `operations_agent.py`, `treasury_agent.py` later). The specialist answers from Vespa CONTEXT plus its tool results.
+5. **Quality critic** — faithfulness JSON score; at most one rewrite through the **same** specialist.
 6. **Output guard** (fail-closed) — SSN/competitor in the model text is replaced with the safe fallback.
 
 **HITL:** complaints / legal / explicit human requests skip RAG and enqueue Redis `hitl:queue`. Managers list and resolve items from Observability (`GET /v1/hitl`, `POST /v1/hitl/{id}/resolve`).

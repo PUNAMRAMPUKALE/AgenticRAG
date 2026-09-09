@@ -7,8 +7,9 @@ from app.infrastructure.agents.guards import SAFE_FALLBACK, input_guard, output_
 from app.infrastructure.agents.hitl import HitlQueue
 from app.infrastructure.agents.mcp_tools import search_knowledge
 from app.infrastructure.agents.quality import critique
+from app.infrastructure.agents.specialists import run_specialist
 from app.infrastructure.agents.supervisor import classify_intent
-from app.infrastructure.llm.assistant import KnowledgeAssistant, extractive_answer
+from app.infrastructure.llm.assistant import extractive_answer
 
 _HITL_MSG = (
     "This needs a human reviewer (complaint, legal, or sensitive request). "
@@ -17,11 +18,10 @@ _HITL_MSG = (
 
 
 class KnowledgeOrchestrator:
-    """Supervisor → specialist (MCP retrieve + RAG) → quality critic; HITL on escalation."""
+    """Supervisor → policy/ops/treasury specialist → quality critic; HITL on escalation."""
 
     def __init__(self, hitl: HitlQueue | None = None):
         self._hitl = hitl or HitlQueue()
-        self._assistant = KnowledgeAssistant()
 
     async def generate(
         self,
@@ -65,13 +65,17 @@ class KnowledgeOrchestrator:
 
         with tracer.start_as_current_span("agent.retrieve"):
             tool = search_knowledge(index, query, k=4)
-        context, citations = tool["context"], tool["citations"]
+        vespa_context, citations = tool["context"], tool["citations"]
 
-        with tracer.start_as_current_span("agent.specialist"):
+        with tracer.start_as_current_span("agent.specialist") as spec_span:
+            spec_span.set_attribute("agent.specialist", intent)
             try:
-                answer, used_llm = await self._assistant.answer_from_retrieval(query, index, context, citations)
+                answer, used_llm, context = await run_specialist(
+                    intent, query, index, vespa_context, citations
+                )
             except Exception:
-                answer, used_llm = extractive_answer(context, citations), False
+                context = vespa_context
+                answer, used_llm = extractive_answer(vespa_context, citations), False
             turn = AgentTurn(answer=answer, citations=citations, used_llm=used_llm, context=context)
         prompt_tokens += 400
         completion_tokens += max(20, len(turn.answer) // 4)
@@ -80,21 +84,25 @@ class KnowledgeOrchestrator:
 
         if turn.used_llm and context:
             with tracer.start_as_current_span("agent.quality"):
-                score, reason, rewrite, qp, qc = await critique(turn.answer, context)
+                _score, reason, rewrite, qp, qc = await critique(turn.answer, context)
             prompt_tokens += qp
             completion_tokens += qc
             llm_calls += 1 if qp else 0
             if rewrite and retries < 1:
                 retries = 1
                 with tracer.start_as_current_span("agent.quality_retry"):
-                    hint = f"{query}\n\nRewrite using only the retrieved documents. Critic: {reason}"
-                    answer, used_llm = await self._assistant.answer_from_retrieval(
-                        hint, index, context, citations
+                    answer, used_llm, context = await run_specialist(
+                        intent,
+                        query,
+                        index,
+                        vespa_context,
+                        citations,
+                        rewrite_hint=reason,
                     )
                     turn = AgentTurn(answer=answer, citations=citations, used_llm=used_llm, context=context)
                     llm_calls += 1 if used_llm else 0
 
-        answer = output_guard(turn.answer or extractive_answer(context, citations), query)
+        answer = output_guard(turn.answer or extractive_answer(vespa_context, citations), query)
         cost = estimate_cost(prompt_tokens, completion_tokens)
         record_usage(
             intent=intent,
